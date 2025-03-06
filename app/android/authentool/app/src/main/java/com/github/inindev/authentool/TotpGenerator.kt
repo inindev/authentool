@@ -1,28 +1,35 @@
 package com.github.inindev.authentool
 
 import java.nio.ByteBuffer
-import java.security.SecureRandom
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.pow
 
 /**
  * Generates Time-Based One-Time Passwords (TOTP) per RFC 6238 using HMAC-SHA1.
+ * Requires a valid secret key provided by the caller.
  */
 class TotpGenerator(
-    private val secretBytes: ByteArray = generateRandomSecret(),
+    private val secretBytes: ByteArray,  // No default value
     private val timeStep: Long = 30L,
     private val digits: Int = 6
 ) {
     companion object {
-        private const val SECRET_LENGTH = 20 // 160 bits, standard for HMAC-SHA1 TOTP
-        private val secureRandom = SecureRandom()
+        // Base32 alphabet per RFC 4648
+        private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 
-        /** Generates a random secret for TOTP. */
-        private fun generateRandomSecret(): ByteArray {
-            val bytes = ByteArray(SECRET_LENGTH)
-            secureRandom.nextBytes(bytes)
-            return bytes
+        /**
+         * Decodes a Base32-encoded string (RFC 4648) into a byte array for TOTP seeds.
+         * @param base32 The Base32-encoded string to decode.
+         * @return The decoded byte array.
+         */
+        fun decodeBase32(base32: String): ByteArray {
+            val cleaned = base32.uppercase().filter { it in ALPHABET }
+            val bits = cleaned.map { ALPHABET.indexOf(it).toString(2).padStart(5, '0') }.joinToString("")
+            val bytes = (0 until bits.length / 8).map {
+                bits.substring(it * 8, (it + 1) * 8).toInt(2).toByte()
+            }
+            return bytes.toByteArray()
         }
     }
 

@@ -1,13 +1,16 @@
 package com.github.inindev.authentool
 
+import android.annotation.SuppressLint
 import android.content.Context
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
+import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -21,26 +24,29 @@ enum class ThemeMode {
 }
 
 data class AuthCode(
-    val id: String = UUID.randomUUID().toString(), // unique identifier
+    val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val seedBase32: String? = null, // Base32 seed, null if using random secret
+    val seedBase32: String,
     val code: String = "",
     val period: Int = 30,
     val digits: Int = 6,
-    val generator: TotpGenerator = seedBase32?.let { TotpGenerator(Base32.decode(it)) } ?: TotpGenerator()
+    val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seedBase32))
 )
 
+@SuppressLint("StaticFieldLeak")  // safe because we use application context
 class MainViewModel(private val context: Context) : ViewModel() {
     val themeMode: ThemeMode
         get() = determineThemeMode()
 
-    val countdownProgress: MutableState<Float> = mutableStateOf(1f)
+    val countdownProgress: MutableState<Float> = mutableFloatStateOf(1f)
     val authentoolCodes: MutableState<List<AuthCode>> = mutableStateOf(emptyList())
 
     private val prefs = EncryptedSharedPreferences.create(
-        "authentool_prefs",
-        MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
         context,
+        "authentool_prefs",
+        MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build(),
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
@@ -65,33 +71,17 @@ class MainViewModel(private val context: Context) : ViewModel() {
     private fun loadCodes() {
         val codesSet = prefs.getStringSet("auth_codes", emptySet()) ?: emptySet()
         authentoolCodes.value = codesSet.mapNotNull { entry ->
-            val (id, name, seed) = entry.split("|", limit = 3)
-            AuthCode(id, name, seed.takeIf { it.isNotEmpty() })
-        }.map { it.copy(code = it.generator.generateCode()) }
-        if (authentoolCodes.value.isEmpty()) {
-            initializeDefaultCodes()
+            val parts = entry.split("|", limit = 3)
+            if (parts.size < 3 || parts[2].isEmpty()) null // skip if seed is missing/invalid
+            else AuthCode(parts[0], parts[1], parts[2]).let {
+                it.copy(code = it.generator.generateCode())
+            }
         }
     }
 
     private fun saveCodes() {
-        val codesSet = authentoolCodes.value.map { "${it.id}|${it.name}|${it.seedBase32.orEmpty()}" }.toSet()
-        prefs.edit().putStringSet("auth_codes", codesSet).apply()
-    }
-
-    private fun initializeDefaultCodes() {
-        authentoolCodes.value = listOf(
-            AuthCode(name = "Facebook"),
-            AuthCode(name = "Google"),
-            AuthCode(name = "Instagram"),
-            AuthCode(name = "xAI"),
-            AuthCode(name = "GitHub"),
-            AuthCode(name = "Proton"),
-            AuthCode(name = "Amazon"),
-            AuthCode(name = "Tesla"),
-            AuthCode(name = "Acme"),
-            AuthCode(name = "Cloudflare")
-        ).map { it.copy(code = it.generator.generateCode()) }
-        saveCodes()
+        val codesSet = authentoolCodes.value.map { "${it.id}|${it.name}|${it.seedBase32}" }.toSet()
+        prefs.edit { putStringSet("auth_codes", codesSet) }
     }
 
     private fun startCountdown() {
@@ -129,10 +119,46 @@ class MainViewModel(private val context: Context) : ViewModel() {
         saveCodes()
     }
 
+    fun swapAuthCode(index: Int, direction: Direction) {
+        val toIndex = when (direction) {
+            Direction.UP -> index - 2
+            Direction.DOWN -> index + 2
+            Direction.LEFT -> index - 1
+            Direction.RIGHT -> index + 1
+        }
+        if (toIndex < 0 || toIndex >= authentoolCodes.value.size || index == toIndex) return
+        when (direction) {
+            Direction.LEFT -> if (index % 2 == 0) return
+            Direction.RIGHT -> if (index % 2 != 0) return
+            else -> {}
+        }
+        val updatedList = authentoolCodes.value.toMutableList().apply {
+            val temp = this[index]
+            this[index] = this[toIndex]
+            this[toIndex] = temp
+        }
+        authentoolCodes.value = updatedList
+        saveCodes()
+    }
+
+    fun updateAuthCodeName(index: Int, newName: String) {
+        if (index < 0 || index >= authentoolCodes.value.size || newName.isBlank()) return
+        val updatedList = authentoolCodes.value.toMutableList().apply {
+            val oldCode = this[index]
+            this[index] = oldCode.copy(name = newName)
+        }
+        authentoolCodes.value = updatedList
+        saveCodes()
+    }
+
     override fun onCleared() {
         countdownJob?.cancel()
         super.onCleared()
     }
+}
+
+enum class Direction {
+    UP, DOWN, LEFT, RIGHT
 }
 
 class MainViewModelFactory(private val context: Context) : ViewModelProvider.Factory {
@@ -142,18 +168,5 @@ class MainViewModelFactory(private val context: Context) : ViewModelProvider.Fac
             return MainViewModel(context) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
-    }
-}
-
-/** Simple Base32 decoder for TOTP seeds (RFC 4648). */
-object Base32 {
-    private val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-    fun decode(base32: String): ByteArray {
-        val cleaned = base32.uppercase().filter { it in alphabet }
-        val bits = cleaned.map { alphabet.indexOf(it).toString(2).padStart(5, '0') }.joinToString("")
-        val bytes = (0 until bits.length / 8).map {
-            bits.substring(it * 8, (it + 1) * 8).toInt(2).toByte()
-        }
-        return bytes.toByteArray()
     }
 }
