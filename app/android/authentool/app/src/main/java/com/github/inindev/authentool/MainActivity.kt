@@ -37,12 +37,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -51,7 +52,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.github.inindev.authentool.ui.theme.AuthentoolTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // countdown bar placement
 private enum class CountdownLocation {
@@ -66,7 +71,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            Authentool()
+            val viewModel = viewModel<MainViewModel>(factory = MainViewModelFactory(applicationContext))
+            AuthentoolTheme(
+                darkTheme = viewModel.themeMode == ThemeMode.NIGHT,
+                dynamicColor = false  // use custom schemes, not dynamic colors
+            ) {
+                Authentool(viewModel = viewModel)
+            }
         }
     }
 }
@@ -76,15 +87,10 @@ class MainActivity : ComponentActivity() {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Authentool(viewModel: MainViewModel = viewModel(factory = MainViewModelFactory(LocalContext.current.applicationContext))) {
+fun Authentool(viewModel: MainViewModel) {
     val countdownProgress = viewModel.countdownProgress.value
     val codes = viewModel.authentoolCodes.value
-    val themeMode = viewModel.themeMode
-
-    val isDayMode by remember(themeMode) { mutableStateOf(themeMode == ThemeMode.DAY) }
-    val backgroundColor by remember(themeMode) { mutableStateOf(if (isDayMode) Color.White else Color(0xFF212121)) }
-    val textColor by remember(themeMode) { mutableStateOf(if (isDayMode) Color.Black else Color.White) }
-    val cardBackground by remember(themeMode) { mutableStateOf(if (isDayMode) Color(0xFFF5F5F5) else Color(0xFF424242)) }
+    val colorScheme = MaterialTheme.colorScheme
 
     var showAddDialog by remember { mutableStateOf(false) }
     var codeToDelete by remember { mutableStateOf<AuthCode?>(null) }
@@ -117,7 +123,7 @@ fun Authentool(viewModel: MainViewModel = viewModel(factory = MainViewModelFacto
                             Icon(Icons.Default.Add, contentDescription = "add entry")
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = if (isDayMode) Color.LightGray else Color.DarkGray)
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = colorScheme.secondary)
                 )
                 if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
                     LinearProgressIndicator(
@@ -125,8 +131,8 @@ fun Authentool(viewModel: MainViewModel = viewModel(factory = MainViewModelFacto
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(8.dp),
-                        color = Color.Blue,
-                        trackColor = Color.Gray
+                        color = colorScheme.primary,
+                        trackColor = colorScheme.onPrimary
                     )
                 }
             }
@@ -154,11 +160,10 @@ fun Authentool(viewModel: MainViewModel = viewModel(factory = MainViewModelFacto
                         editingIndex = null
                     }
                 },
-            color = backgroundColor
+            color = colorScheme.surface
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
+                modifier = Modifier.fillMaxSize()
             ) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
@@ -171,8 +176,9 @@ fun Authentool(viewModel: MainViewModel = viewModel(factory = MainViewModelFacto
                     itemsIndexed(codes) { index, code ->
                         AuthenticatorCard(
                             code = code,
-                            textColor = textColor,
-                            cardBackground = cardBackground,
+                            textColor = colorScheme.onSurfaceVariant,
+                            cardBackground = colorScheme.surfaceVariant,
+                            highlightColor = colorScheme.tertiary,
                             isEditing = index == editingIndex,
                             onLongPress = { editingIndex = index },
                             onDeleteClick = { codeToDelete = code },
@@ -226,8 +232,8 @@ fun Authentool(viewModel: MainViewModel = viewModel(factory = MainViewModelFacto
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(8.dp),
-                        color = Color.Blue,
-                        trackColor = Color.Gray
+                        color = colorScheme.primary,
+                        trackColor = colorScheme.onPrimary
                     )
                 }
             }
@@ -268,7 +274,7 @@ fun Authentool(viewModel: MainViewModel = viewModel(factory = MainViewModelFacto
 }
 
 /**
- * Groups move-related actions for an authenticator card.
+ * groups move-related actions for an authenticator card.
  */
 data class MoveActions(
     val onMoveUp: () -> Unit,
@@ -279,13 +285,15 @@ data class MoveActions(
 
 /**
  * Displays an authenticator card with a name, code, and editing controls.
- * When editing, shows a text field with a delete button positioned higher and further right, and move buttons below.
+ * When tapped, highlights the background and copies the code to the clipboard without spaces.
+ * When long-pressed, enters editing mode with a text field and move/delete buttons.
  */
 @Composable
 fun AuthenticatorCard(
     code: AuthCode,
     textColor: Color,
     cardBackground: Color,
+    highlightColor: Color,
     isEditing: Boolean,
     onLongPress: () -> Unit,
     onDeleteClick: () -> Unit,
@@ -295,16 +303,30 @@ fun AuthenticatorCard(
     totalItems: Int
 ) {
     var editedName by remember(isEditing) { mutableStateOf(code.name) }
+    var isHighlighted by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    val clipboardManager = LocalClipboardManager.current
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(4.dp)
             .pointerInput(Unit) {
-                detectTapGestures(onLongPress = { onLongPress() })
+                detectTapGestures(
+                    onTap = {
+                        isHighlighted = true
+                        val codeWithoutSpaces = code.code.replace(" ", "")
+                        clipboardManager.setText(AnnotatedString(codeWithoutSpaces))
+                        coroutineScope.launch {
+                            delay(8000) // long highlight for easy reference
+                            isHighlighted = false
+                        }
+                    },
+                    onLongPress = { onLongPress() }
+                )
             },
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = cardBackground),
+        colors = CardDefaults.cardColors(containerColor = if (isHighlighted) highlightColor else cardBackground),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
@@ -352,7 +374,8 @@ fun AuthenticatorCard(
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = formatCode(code.code),
-                color = Color.Blue,
+//                color = if (isHighlighted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                color = if (isHighlighted) MaterialTheme.colorScheme.onTertiary else MaterialTheme.colorScheme.primary,
                 fontSize = 36.sp,
                 fontFamily = FontFamily(Font(R.font.lato_bold)),
                 textAlign = TextAlign.Start
@@ -394,8 +417,8 @@ fun AuthenticatorCard(
 }
 
 /**
- * Dialog for adding a new authenticator entry with name and seed fields.
- * Catches exceptions on "add" and displays an error message, allowing the user to fix or cancel.
+ * dialog for adding a new authenticator entry with name and seed fields.
+ * catches exceptions on "add" and displays an error message, allowing the user to fix or cancel.
  */
 @Composable
 fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
@@ -406,7 +429,10 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
     BackHandler(enabled = true, onBack = onDismiss)
 
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(8.dp), color = Color.White) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surface // use themed surface color
+        ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Add Authenticator Entry", fontSize = 20.sp)
                 Spacer(modifier = Modifier.height(8.dp))
