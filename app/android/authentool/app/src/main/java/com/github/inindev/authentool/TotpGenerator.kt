@@ -16,7 +16,7 @@ class TotpGenerator(
 ) {
     companion object {
         // Base32 alphabet per RFC 4648
-        private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 
         /**
          * Decodes a Base32-encoded string (RFC 4648) into a byte array for TOTP seeds.

@@ -18,12 +18,6 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.time.LocalTime
-import java.time.ZoneId
-
-enum class ThemeMode {
-    DAY, NIGHT
-}
 
 @Serializable
 data class AuthCode(
@@ -39,11 +33,10 @@ data class AuthCode(
 
 @SuppressLint("StaticFieldLeak")  // safe because we use application context
 class MainViewModel(private val context: Context) : ViewModel() {
-    val themeMode: ThemeMode
-        get() = determineThemeMode()
-
     val countdownProgress: MutableState<Float> = mutableFloatStateOf(1f)
     val authentoolCodes: MutableState<List<AuthCode>> = mutableStateOf(emptyList())
+    val themeMode: ThemeMode
+        get() = ThemeMode.valueOf(prefs.getString("theme_preference", "SYSTEM") ?: "SYSTEM")
 
     private val prefs = EncryptedSharedPreferences.create(
         context,
@@ -61,16 +54,6 @@ class MainViewModel(private val context: Context) : ViewModel() {
     init {
         loadCodes()
         startCountdown()
-    }
-
-    private fun determineThemeMode(): ThemeMode {
-        val currentTime = LocalTime.now(ZoneId.systemDefault())
-        val dayStart = LocalTime.of(6, 0)
-        val nightStart = LocalTime.of(20, 0)
-        return when {
-            currentTime.isAfter(dayStart) && currentTime.isBefore(nightStart) -> ThemeMode.DAY
-            else -> ThemeMode.NIGHT
-        }
     }
 
     private fun loadCodes() {
@@ -164,6 +147,10 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
 enum class Direction {
     UP, DOWN, LEFT, RIGHT
+}
+
+enum class ThemeMode {
+    SYSTEM, DAY, NIGHT
 }
 
 class MainViewModelFactory(private val context: Context) : ViewModelProvider.Factory {

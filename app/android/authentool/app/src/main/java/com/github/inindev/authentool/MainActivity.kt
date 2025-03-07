@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -54,7 +55,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.github.inindev.authentool.ui.theme.AuthentoolTheme
+import com.github.inindev.authentool.ui.theme.AppColorTheme
+import com.github.inindev.authentool.ui.theme.customColorScheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -72,13 +74,21 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val viewModel = viewModel<MainViewModel>(factory = MainViewModelFactory(applicationContext))
-            AuthentoolTheme(
-                darkTheme = viewModel.themeMode == ThemeMode.NIGHT,
-                dynamicColor = false  // use custom schemes, not dynamic colors
-            ) {
-                Authentool(viewModel = viewModel)
-            }
+            MainActivityContent(viewModel = viewModel)
         }
+    }
+}
+
+@Composable
+fun MainActivityContent(viewModel: MainViewModel) {
+    val systemDarkTheme = isSystemInDarkTheme()
+    val darkTheme = when (viewModel.themeMode) {
+        ThemeMode.SYSTEM -> systemDarkTheme
+        ThemeMode.DAY -> false
+        ThemeMode.NIGHT -> true
+    }
+    AppColorTheme(darkTheme = darkTheme, dynamicColor = false) {
+        Authentool(viewModel = viewModel)
     }
 }
 
@@ -90,49 +100,33 @@ class MainActivity : ComponentActivity() {
 fun Authentool(viewModel: MainViewModel) {
     val countdownProgress = viewModel.countdownProgress.value
     val codes = viewModel.authentoolCodes.value
-    val colorScheme = MaterialTheme.colorScheme
+    val colorScheme = MaterialTheme.customColorScheme
 
     var showAddDialog by remember { mutableStateOf(false) }
     var codeToDelete by remember { mutableStateOf<AuthCode?>(null) }
     var editingIndex by remember { mutableStateOf<Int?>(null) }
     var editedName by remember { mutableStateOf<String?>(null) }
 
-    // handle back gesture: finish editing if active, otherwise do nothing (prevent app exit)
-    BackHandler(enabled = true) {
-        if (editingIndex != null) {
-            val currentEditingIndex = editingIndex
-            if (currentEditingIndex != null &&
-                currentEditingIndex >= 0 &&
-                currentEditingIndex < codes.size &&
-                editedName != null &&
-                editedName != codes[currentEditingIndex].name
-            ) {
-                viewModel.updateAuthCodeName(currentEditingIndex, editedName!!)
-            }
-            editingIndex = null
-        }
-    }
+    BackHandler(enabled = editingIndex == null) { /* ignore */ }
 
     Scaffold(
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text("Authentool") },
+                    title = { Text("Authentool", color = colorScheme.TopBarText) },
                     actions = {
                         IconButton(onClick = { showAddDialog = true }) {
-                            Icon(Icons.Default.Add, contentDescription = "add entry")
+                            Icon(Icons.Default.Add, contentDescription = "add entry", tint = colorScheme.TopBarText)
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = colorScheme.secondary)
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = colorScheme.TopBarBackground)
                 )
                 if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
                     LinearProgressIndicator(
                         progress = { countdownProgress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp),
-                        color = colorScheme.primary,
-                        trackColor = colorScheme.onPrimary
+                        modifier = Modifier.fillMaxWidth().height(8.dp),
+                        color = colorScheme.ProgressFill,
+                        trackColor = colorScheme.ProgressTrack
                     )
                 }
             }
@@ -143,42 +137,33 @@ fun Authentool(viewModel: MainViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .pointerInput(Unit) {
-                    detectTapGestures {
-                        val currentEditingIndex = editingIndex
-                        if (currentEditingIndex != null &&
-                            currentEditingIndex >= 0 &&
-                            currentEditingIndex < codes.size &&
-                            editedName != null
-                        ) {
+                .pointerInput(editingIndex) {
+                    if (editingIndex != null) {
+                        detectTapGestures {
                             editedName?.let { name ->
-                                if (name != codes[currentEditingIndex].name) {
-                                    viewModel.updateAuthCodeName(currentEditingIndex, name)
+                                if (name != codes[editingIndex!!].name) {
+                                    viewModel.updateAuthCodeName(editingIndex!!, name)
                                 }
                             }
+                            editingIndex = null
                         }
-                        editingIndex = null
                     }
                 },
-            color = colorScheme.surface
+            color = colorScheme.AppBackground
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize()
-            ) {
+            Column(modifier = Modifier.fillMaxSize()) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(all = 16.dp),
+                    modifier = Modifier.weight(1f).padding(all = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     itemsIndexed(codes) { index, code ->
                         AuthenticatorCard(
                             code = code,
-                            textColor = colorScheme.onSurfaceVariant,
-                            cardBackground = colorScheme.surfaceVariant,
-                            highlightColor = colorScheme.tertiary,
+                            textColor = colorScheme.CardName,
+                            cardBackground = colorScheme.CardBackground,
+                            highlightColor = colorScheme.CardHiBackground,
                             isEditing = index == editingIndex,
                             onLongPress = { editingIndex = index },
                             onDeleteClick = { codeToDelete = code },
@@ -222,18 +207,24 @@ fun Authentool(viewModel: MainViewModel) {
                             ),
                             onNameChanged = { newName -> editedName = newName },
                             index = index,
-                            totalItems = codes.size
+                            totalItems = codes.size,
+                            onEditingDismissed = {
+                                editedName?.let { name ->
+                                    if (name != code.name) {
+                                        viewModel.updateAuthCodeName(index, name)
+                                    }
+                                }
+                                editingIndex = null
+                            }
                         )
                     }
                 }
                 if (COUNTDOWN_LOCATION == CountdownLocation.BOTTOM || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
                     LinearProgressIndicator(
                         progress = { countdownProgress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp),
-                        color = colorScheme.primary,
-                        trackColor = colorScheme.onPrimary
+                        modifier = Modifier.fillMaxWidth().height(8.dp),
+                        color = colorScheme.ProgressFill,
+                        trackColor = colorScheme.ProgressTrack
                     )
                 }
             }
@@ -253,20 +244,20 @@ fun Authentool(viewModel: MainViewModel) {
     codeToDelete?.let { code ->
         AlertDialog(
             onDismissRequest = { codeToDelete = null },
-            title = { Text("Delete Entry") },
-            text = { Text("Are you sure you want to delete ${code.name}?") },
+            title = { Text("Delete Entry", color = colorScheme.AppText) },
+            text = { Text("Are you sure you want to delete ${code.name}?", color = colorScheme.AppText) },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.deleteAuthCode(code)
                     codeToDelete = null
                     editingIndex = null
                 }) {
-                    Text("delete")
+                    Text("delete", color = colorScheme.CardTotp)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { codeToDelete = null }) {
-                    Text("cancel")
+                    Text("cancel", color = colorScheme.CardTotp)
                 }
             }
         )
@@ -284,9 +275,9 @@ data class MoveActions(
 )
 
 /**
- * Displays an authenticator card with a name, code, and editing controls.
- * When tapped, highlights the background and copies the code to the clipboard without spaces.
- * When long-pressed, enters editing mode with a text field and move/delete buttons.
+ * displays an authenticator card with a name, code, and editing controls.
+ * when tapped, highlights the background and copies the code to the clipboard without spaces.
+ * when long-pressed, enters editing mode with a text field and move/delete buttons.
  */
 @Composable
 fun AuthenticatorCard(
@@ -300,12 +291,18 @@ fun AuthenticatorCard(
     moveActions: MoveActions,
     onNameChanged: (String) -> Unit,
     index: Int,
-    totalItems: Int
+    totalItems: Int,
+    onEditingDismissed: () -> Unit
 ) {
+    val colors = MaterialTheme.customColorScheme
     var editedName by remember(isEditing) { mutableStateOf(code.name) }
     var isHighlighted by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
+
+    BackHandler(enabled = isEditing) {
+        onEditingDismissed()
+    }
 
     Card(
         modifier = Modifier
@@ -315,10 +312,10 @@ fun AuthenticatorCard(
                 detectTapGestures(
                     onTap = {
                         isHighlighted = true
-                        val codeWithoutSpaces = code.code.replace(" ", "")
+                        val codeWithoutSpaces = code.code.replace("\\s".toRegex(), "")
                         clipboardManager.setText(AnnotatedString(codeWithoutSpaces))
                         coroutineScope.launch {
-                            delay(8000) // long highlight for easy reference
+                            delay(8000)  // long highlight for easy reference
                             isHighlighted = false
                         }
                     },
@@ -330,8 +327,7 @@ fun AuthenticatorCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
-            modifier = Modifier
-                .padding(start = 20.dp, top = 16.dp, end = 16.dp, bottom = 16.dp),
+            modifier = Modifier.padding(start = 20.dp, top = 16.dp, end = 16.dp, bottom = 16.dp),
             horizontalAlignment = Alignment.Start
         ) {
             Row(
@@ -345,27 +341,21 @@ fun AuthenticatorCard(
                             editedName = newValue
                             onNameChanged(newValue)
                         },
-                        label = { Text("name") },
+                        label = { Text("name", color = colors.AppText) },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
                     Box(
-                        modifier = Modifier
-                            .padding(start = 8.dp, bottom = 8.dp)
-                            .align(Alignment.Top)
+                        modifier = Modifier.padding(start = 8.dp, bottom = 8.dp).align(Alignment.Top)
                     ) {
                         IconButton(onClick = onDeleteClick) {
-                            Icon(
-                                Icons.Default.Cancel,
-                                contentDescription = "delete",
-                                tint = MaterialTheme.colorScheme.error
-                            )
+                            Icon(Icons.Default.Cancel, contentDescription = "delete", tint = MaterialTheme.colorScheme.error)
                         }
                     }
                 } else {
                     Text(
                         text = code.name,
-                        color = textColor,
+                        color = if (isHighlighted) colors.CardHiName else textColor,
                         fontSize = 14.sp,
                         fontFamily = FontFamily(Font(R.font.lato_regular))
                     )
@@ -374,8 +364,7 @@ fun AuthenticatorCard(
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = formatCode(code.code),
-//                color = if (isHighlighted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-                color = if (isHighlighted) MaterialTheme.colorScheme.onTertiary else MaterialTheme.colorScheme.primary,
+                color = if (isHighlighted) colors.CardHiTotp else colors.CardTotp,
                 fontSize = 36.sp,
                 fontFamily = FontFamily(Font(R.font.lato_bold)),
                 textAlign = TextAlign.Start
@@ -386,29 +375,17 @@ fun AuthenticatorCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    IconButton(
-                        onClick = moveActions.onMoveUp,
-                        enabled = index >= 2
-                    ) {
-                        Icon(Icons.Default.ArrowUpward, contentDescription = "move up")
+                    IconButton(onClick = moveActions.onMoveUp, enabled = index >= 2) {
+                        Icon(Icons.Default.ArrowUpward, contentDescription = "move up", tint = colors.AppText)
                     }
-                    IconButton(
-                        onClick = moveActions.onMoveLeft,
-                        enabled = index % 2 != 0
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "move left")
+                    IconButton(onClick = moveActions.onMoveLeft, enabled = index % 2 != 0) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "move left", tint = colors.AppText)
                     }
-                    IconButton(
-                        onClick = moveActions.onMoveRight,
-                        enabled = index % 2 == 0 && index < totalItems - 1
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "move right")
+                    IconButton(onClick = moveActions.onMoveRight, enabled = index % 2 == 0 && index < totalItems - 1) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "move right", tint = colors.AppText)
                     }
-                    IconButton(
-                        onClick = moveActions.onMoveDown,
-                        enabled = index < totalItems - 2
-                    ) {
-                        Icon(Icons.Default.ArrowDownward, contentDescription = "move down")
+                    IconButton(onClick = moveActions.onMoveDown, enabled = index < totalItems - 2) {
+                        Icon(Icons.Default.ArrowDownward, contentDescription = "move down", tint = colors.AppText)
                     }
                 }
             }
@@ -422,6 +399,7 @@ fun AuthenticatorCard(
  */
 @Composable
 fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
+    val colors = MaterialTheme.customColorScheme
     var name by remember { mutableStateOf("") }
     var seed by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -431,15 +409,15 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surface // use themed surface color
+            color = colors.AppBackground
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Add Authenticator Entry", fontSize = 20.sp)
+                Text("Add Authenticator Entry", fontSize = 20.sp, color = colors.AppText)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("name") },
+                    label = { Text("name", color = colors.AppText) },
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
@@ -450,7 +428,7 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                 OutlinedTextField(
                     value = seed,
                     onValueChange = { seed = it },
-                    label = { Text("base32 seed") },
+                    label = { Text("base32 seed", color = colors.AppText) },
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
@@ -470,20 +448,27 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                     TextButton(onClick = onDismiss) {
-                        Text("cancel")
+                        Text("cancel", color = colors.CardTotp)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     TextButton(
                         onClick = {
-                            try {
-                                onAdd(name, seed)
-                                errorMessage = null
-                            } catch (e: Exception) {
-                                errorMessage = "Cannot add entry: Invalid seed format. Please fix the input."
+                            when {
+                                name.isBlank() -> errorMessage = "Name cannot be empty."
+                                seed.isBlank() -> errorMessage = "Seed cannot be empty."
+                                !isValidBase32(seed) -> errorMessage = "Seed must be valid Base32 (A-Z, 2-7)."
+                                else -> {
+                                    try {
+                                        onAdd(name, seed)
+                                        errorMessage = null
+                                    } catch (e: Exception) {
+                                        errorMessage = "Unable to add entry. Please check the seed and try again."
+                                    }
+                                }
                             }
                         }
                     ) {
-                        Text("add")
+                        Text("add", color = colors.CardTotp)
                     }
                 }
             }
@@ -498,4 +483,16 @@ private fun formatCode(code: String): String {
     } else {
         code
     }
+}
+
+/**
+ * Validates that a string is a valid Base32-encoded seed.
+ * Ensures it only contains characters from the Base32 alphabet and has a length compatible with Base32 decoding.
+ */
+private fun isValidBase32(seed: String): Boolean {
+    val alphabet = TotpGenerator.ALPHABET
+    val cleanedSeed = seed.uppercase().filter { it != '=' } // Ignore padding for initial check
+    return cleanedSeed.isNotEmpty() &&
+            cleanedSeed.all { it in alphabet } &&
+            (cleanedSeed.length % 8 == 0 || cleanedSeed.length % 8 in listOf(2, 4, 5, 7)) // Valid Base32 lengths
 }
