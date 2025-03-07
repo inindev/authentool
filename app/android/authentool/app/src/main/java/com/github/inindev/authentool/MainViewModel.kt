@@ -15,22 +15,26 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.time.LocalTime
 import java.time.ZoneId
-import java.util.UUID
 
 enum class ThemeMode {
     DAY, NIGHT
 }
 
+@Serializable
 data class AuthCode(
-    val id: String = UUID.randomUUID().toString(),
+    val id: Int,
     val name: String,
-    val seedBase32: String,
-    val code: String = "",
-    val period: Int = 30,
-    val digits: Int = 6,
-    val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seedBase32))
+    val seed: String,
+    val code: String = "", // transient, not serialized
+    val period: Int = 30,  // transient
+    val digits: Int = 6,   // transient
+    @kotlinx.serialization.Transient // explicitly exclude from serialization
+    val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seed))
 )
 
 @SuppressLint("StaticFieldLeak")  // safe because we use application context
@@ -51,6 +55,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
 
+    private var nextId: Int = 1
     private var countdownJob: Job? = null
 
     init {
@@ -69,19 +74,17 @@ class MainViewModel(private val context: Context) : ViewModel() {
     }
 
     private fun loadCodes() {
-        val codesSet = prefs.getStringSet("auth_codes", emptySet()) ?: emptySet()
-        authentoolCodes.value = codesSet.mapNotNull { entry ->
-            val parts = entry.split("|", limit = 3)
-            if (parts.size < 3 || parts[2].isEmpty()) null // skip if seed is missing/invalid
-            else AuthCode(parts[0], parts[1], parts[2]).let {
-                it.copy(code = it.generator.generateCode())
-            }
+        val json = prefs.getString("auth_codes_list", "[]") ?: "[]"
+        authentoolCodes.value = Json.decodeFromString<List<AuthCode>>(json).map {
+            it.copy(code = it.generator.generateCode())
         }
+        // Compute nextId from loaded data
+        nextId = authentoolCodes.value.maxOfOrNull { it.id }?.plus(1) ?: 1
     }
 
     private fun saveCodes() {
-        val codesSet = authentoolCodes.value.map { "${it.id}|${it.name}|${it.seedBase32}" }.toSet()
-        prefs.edit { putStringSet("auth_codes", codesSet) }
+        val json = Json.encodeToString(authentoolCodes.value)
+        prefs.edit { putString("auth_codes_list", json) }
     }
 
     private fun startCountdown() {
@@ -106,11 +109,12 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
-    fun addAuthCode(name: String, seedBase32: String) {
-        val newCode = AuthCode(name = name, seedBase32 = seedBase32).let {
+    fun addAuthCode(name: String, seed: String) {
+        val newCode = AuthCode(id = nextId, name = name, seed = seed).let {
             it.copy(code = it.generator.generateCode())
         }
         authentoolCodes.value = authentoolCodes.value + newCode
+        nextId++ // Increment after use
         saveCodes()
     }
 
@@ -153,6 +157,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     override fun onCleared() {
         countdownJob?.cancel()
+        authentoolCodes.value = emptyList() // Clear sensitive data
         super.onCleared()
     }
 }

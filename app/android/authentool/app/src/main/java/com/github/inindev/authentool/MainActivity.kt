@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cancel
@@ -48,7 +49,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.lifecycle.viewmodel.compose.viewModel
+
+// countdown bar placement
+private enum class CountdownLocation {
+    NONE,
+    TOP,
+    BOTTOM,
+    BOTH
+}
+private val COUNTDOWN_LOCATION = CountdownLocation.BOTH
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,20 +91,45 @@ fun Authentool(viewModel: MainViewModel = viewModel(factory = MainViewModelFacto
     var editingIndex by remember { mutableStateOf<Int?>(null) }
     var editedName by remember { mutableStateOf<String?>(null) }
 
-    // prevent back press from closing the app
-    BackHandler(enabled = true, onBack = { /* do nothing */ })
+    // handle back gesture: finish editing if active, otherwise do nothing (prevent app exit)
+    BackHandler(enabled = true) {
+        if (editingIndex != null) {
+            val currentEditingIndex = editingIndex
+            if (currentEditingIndex != null &&
+                currentEditingIndex >= 0 &&
+                currentEditingIndex < codes.size &&
+                editedName != null &&
+                editedName != codes[currentEditingIndex].name
+            ) {
+                viewModel.updateAuthCodeName(currentEditingIndex, editedName!!)
+            }
+            editingIndex = null
+        }
+    }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Authentool") },
-                actions = {
-                    IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Default.Add, contentDescription = "add entry")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = if (isDayMode) Color.LightGray else Color.DarkGray)
-            )
+            Column {
+                TopAppBar(
+                    title = { Text("Authentool") },
+                    actions = {
+                        IconButton(onClick = { showAddDialog = true }) {
+                            Icon(Icons.Default.Add, contentDescription = "add entry")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = if (isDayMode) Color.LightGray else Color.DarkGray)
+                )
+                if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
+                    LinearProgressIndicator(
+                        progress = { countdownProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp),
+                        color = Color.Blue,
+                        trackColor = Color.Gray
+                    )
+                }
+            }
         },
         modifier = Modifier.fillMaxSize()
     ) { paddingValues ->
@@ -183,14 +220,16 @@ fun Authentool(viewModel: MainViewModel = viewModel(factory = MainViewModelFacto
                         )
                     }
                 }
-                LinearProgressIndicator(
-                    progress = { countdownProgress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp),
-                    color = Color.Blue,
-                    trackColor = Color.Gray
-                )
+                if (COUNTDOWN_LOCATION == CountdownLocation.BOTTOM || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
+                    LinearProgressIndicator(
+                        progress = { countdownProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp),
+                        color = Color.Blue,
+                        trackColor = Color.Gray
+                    )
+                }
             }
         }
     }
@@ -255,7 +294,6 @@ fun AuthenticatorCard(
     index: Int,
     totalItems: Int
 ) {
-    // edited name state, reset when isEditing changes
     var editedName by remember(isEditing) { mutableStateOf(code.name) }
 
     Card(
@@ -274,7 +312,6 @@ fun AuthenticatorCard(
                 .padding(start = 20.dp, top = 16.dp, end = 16.dp, bottom = 16.dp),
             horizontalAlignment = Alignment.Start
         ) {
-            // name display or edit field with delete button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -312,11 +349,7 @@ fun AuthenticatorCard(
                     )
                 }
             }
-
-            // spacing between name and code
             Spacer(modifier = Modifier.height(6.dp))
-
-            // authentication code
             Text(
                 text = formatCode(code.code),
                 color = Color.Blue,
@@ -324,8 +357,6 @@ fun AuthenticatorCard(
                 fontFamily = FontFamily(Font(R.font.lato_bold)),
                 textAlign = TextAlign.Start
             )
-
-            // editing controls: up, left, right, down
             if (isEditing) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
@@ -372,7 +403,6 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
     var seed by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // close dialog on back press (esc key)
     BackHandler(enabled = true, onBack = onDismiss)
 
     Dialog(onDismissRequest = onDismiss) {
@@ -384,16 +414,24 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("name") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(
+                        autoCorrectEnabled = false,
+                        imeAction = ImeAction.Next
+                    )
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = seed,
                     onValueChange = { seed = it },
                     label = { Text("base32 seed") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(
+                        autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Ascii,
+                        imeAction = ImeAction.Done
+                    )
                 )
-                // display error message if present
                 errorMessage?.let { message ->
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -413,9 +451,9 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                         onClick = {
                             try {
                                 onAdd(name, seed)
-                                errorMessage = null  // clear error on success
+                                errorMessage = null
                             } catch (e: Exception) {
-                                errorMessage = "Cannot add entry: ${e.message ?: "Invalid seed"}. Please fix the input."
+                                errorMessage = "Cannot add entry: Invalid seed format. Please fix the input."
                             }
                         }
                     ) {
@@ -430,8 +468,8 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
 // format a 6-digit code as "xxx xxx" with a non-breaking space
 private fun formatCode(code: String): String {
     return if (code.length == 6) {
-        "${code.substring(0, 3)}\u00A0${code.substring(3)}"  // use non-breaking space
+        "${code.substring(0, 3)}\u00A0${code.substring(3)}"
     } else {
-        code  // fallback if code isn't 6 digits
+        code
     }
 }
