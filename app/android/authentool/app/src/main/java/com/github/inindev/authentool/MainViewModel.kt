@@ -2,6 +2,7 @@ package com.github.inindev.authentool
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -33,48 +34,41 @@ data class AuthCardData(val name: String, val seed: String) {
     }
 }
 
-@SuppressLint("StaticFieldLeak")  // safe because we use application context
+@SuppressLint("StaticFieldLeak") // safe with application context
 class MainViewModel(private val context: Context) : ViewModel() {
     val countdownProgress: MutableState<Float> = mutableFloatStateOf(1f)
-    private val authentoolCodes: List<AuthCardData> = mutableListOf()
+    private val authentoolCodes: MutableList<AuthCardData> = mutableListOf()
     val codesState: MutableState<List<AuthCardData>> = mutableStateOf(authentoolCodes)
+    val errorMessage: MutableState<String?> = mutableStateOf(null)
+    private var countdownJob: Job? = null
+
+    private val prefs by lazy {
+        try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                context,
+                "authentool_prefs",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Failed to initialize EncryptedSharedPreferences: ${e.message}")
+            errorMessage.value = "Storage initialization failed. Changes will not persist."
+            null
+        }
+    }
 
     val themeMode: ThemeMode
-        get() = ThemeMode.valueOf(prefs.getString("theme_preference", "SYSTEM") ?: "SYSTEM")
-
-    private val prefs = EncryptedSharedPreferences.create(
-        context,
-        "authentool_prefs",
-        MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
-
-    private var nextId: Int = 1
-    private var countdownJob: Job? = null
+        get() = prefs?.let {
+            ThemeMode.valueOf(it.getString("theme_preference", "SYSTEM") ?: "SYSTEM")
+        } ?: ThemeMode.SYSTEM // fallback to system if prefs is null
 
     init {
         loadCodes()
         startCountdown()
-    }
-
-    private fun loadCodes() {
-        val json = prefs.getString("auth_codes_list", "[]") ?: "[]"
-        val loadedPairs = Json.decodeFromString<List<Pair<String, String>>>(json)
-        authentoolCodes as MutableList<AuthCardData>
-        authentoolCodes.clear()
-        authentoolCodes.addAll(loadedPairs.map { AuthCardData(it.first, it.second) })
-        codesState.value = authentoolCodes
-        // nextId not needed anymore, but kept for potential future use
-        nextId = authentoolCodes.size + 1
-    }
-
-    private fun saveCodes() {
-        val pairs = authentoolCodes.map { it.name to it.seed }
-        val json = Json.encodeToString(pairs)
-        prefs.edit { putString("auth_codes_list", json) }
     }
 
     private fun startCountdown() {
@@ -89,29 +83,67 @@ class MainViewModel(private val context: Context) : ViewModel() {
                 if (seconds == 0L && millisFraction < 0.05f) {
                     updateCodes()
                 }
-                delay(64) // 10 updates per second
+                delay(100)
             }
         }
     }
 
-    private fun updateCodes() {
-        for (card in authentoolCodes) {
-            card.updateTotp()
+    private fun loadCodes() {
+        val preferences = prefs // local variable to avoid smart cast issue
+        if (preferences == null) {
+            Log.w("MainViewModel", "Prefs unavailable - using in-memory storage")
+            return
+        }
+        try {
+            val json = preferences.getString("auth_codes_list", "[]") ?: "[]"
+            val loadedPairs = Json.decodeFromString<List<Pair<String, String>>>(json)
+            authentoolCodes.clear()
+            authentoolCodes.addAll(loadedPairs.map { AuthCardData(it.first, it.second) })
+            codesState.value = authentoolCodes
+            errorMessage.value = null
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Failed to load codes: ${e.stackTraceToString()}")
+            errorMessage.value = "Failed to load saved codes. Using temporary storage."
+            authentoolCodes.clear()
+            codesState.value = authentoolCodes
+        }
+    }
+
+    private fun saveCodes() {
+        val preferences = prefs // local variable to avoid smart cast issue
+        if (preferences == null) {
+            Log.w("MainViewModel", "Prefs unavailable - skipping save")
+            errorMessage.value = "Storage unavailable. Changes won’t persist."
+            return
+        }
+        try {
+            val pairs = authentoolCodes.map { it.name to it.seed }
+            val json = Json.encodeToString(pairs)
+            preferences.edit { putString("auth_codes_list", json) }
+            errorMessage.value = null
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Failed to save codes: ${e.stackTraceToString()}")
+            errorMessage.value = "Failed to save changes. Data may be lost."
         }
     }
 
     fun addAuthCode(name: String, seed: String) {
-        val newCard = AuthCardData(name, seed)
-        authentoolCodes as MutableList<AuthCardData>
-        authentoolCodes.add(newCard)
-        codesState.value = authentoolCodes
-        saveCodes()
+        try {
+            val newCard = AuthCardData(name, seed)
+            authentoolCodes.add(newCard)
+            codesState.value = authentoolCodes.toList()
+            saveCodes()
+        } catch (e: IllegalArgumentException) {
+            errorMessage.value = "Invalid seed: ${e.message}"
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Unexpected error adding code: ${e.message}")
+            errorMessage.value = "Failed to add entry: ${e.message}"
+        }
     }
 
     fun deleteAuthCode(cardToDelete: AuthCardData) {
-        authentoolCodes as MutableList<AuthCardData>
         authentoolCodes.remove(cardToDelete)
-        codesState.value = authentoolCodes
+        codesState.value = authentoolCodes.toList()
         saveCodes()
     }
 
@@ -128,26 +160,30 @@ class MainViewModel(private val context: Context) : ViewModel() {
             Direction.RIGHT -> if (index % 2 != 0) return
             else -> {}
         }
-        authentoolCodes as MutableList<AuthCardData>
         val temp = authentoolCodes[index]
         authentoolCodes[index] = authentoolCodes[toIndex]
         authentoolCodes[toIndex] = temp
-        codesState.value = authentoolCodes
+        codesState.value = authentoolCodes.toList()
         saveCodes()
     }
 
     fun updateAuthCodeName(index: Int, newName: String) {
         if (index < 0 || index >= authentoolCodes.size || newName.isBlank()) return
-        authentoolCodes as MutableList<AuthCardData>
         val oldCard = authentoolCodes[index]
         authentoolCodes[index] = AuthCardData(newName, oldCard.seed)
-        codesState.value = authentoolCodes
+        codesState.value = authentoolCodes.toList()
         saveCodes()
+    }
+
+    private fun updateCodes() {
+        for (card in authentoolCodes) {
+            card.updateTotp()
+        }
+        codesState.value = authentoolCodes.toList()
     }
 
     override fun onCleared() {
         countdownJob?.cancel()
-        authentoolCodes as MutableList<AuthCardData>
         authentoolCodes.clear()
         codesState.value = authentoolCodes
         super.onCleared()

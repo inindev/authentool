@@ -32,12 +32,16 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,12 +52,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.inindev.authentool.ui.theme.AppColorTheme
 import com.github.inindev.authentool.ui.theme.customColorScheme
@@ -89,48 +93,76 @@ fun MainActivityContent(viewModel: MainViewModel) {
     }
     var showAddDialog by remember { mutableStateOf(false) }
     var codeToDelete by remember { mutableStateOf<AuthCardData?>(null) }
+    val errorMessage by viewModel.errorMessage // Observe error state
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+
+    // show snackbar when errorMessage changes
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let { message ->
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar(
+                    message = message,
+                    duration = SnackbarDuration.Long  // 10s for visibility
+                )
+                // viewModel.errorMessage.value = null  // clear error after display
+            }
+        }
+    }
 
     AppColorTheme(darkTheme = darkTheme, dynamicColor = false) {
-        Authentool(
-            viewModel = viewModel,
-            onShowAddDialogChange = { showAddDialog = it },
-            onCodeToDeleteChange = { codeToDelete = it }
-        )
-        if (showAddDialog) {
-            AddEntryDialog(
-                onDismiss = { showAddDialog = false },
-                onAdd = { name, seed ->
-                    viewModel.addAuthCode(name, seed)
-                    showAddDialog = false
+        Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            modifier = Modifier.fillMaxSize()
+        ) { paddingValues ->
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues),
+                color = MaterialTheme.customColorScheme.AppBackground
+            ) {
+                AuthGrid(
+                    viewModel = viewModel,
+                    onShowAddDialogChange = { showAddDialog = it },
+                    onCodeToDeleteChange = { codeToDelete = it }
+                )
+                if (showAddDialog) {
+                    AddEntryDialog(
+                        onDismiss = { showAddDialog = false },
+                        onAdd = { name, seed ->
+                            viewModel.addAuthCode(name, seed)
+                            showAddDialog = false
+                        }
+                    )
                 }
-            )
-        }
-        codeToDelete?.let { card ->
-            AlertDialog(
-                onDismissRequest = { codeToDelete = null },
-                title = { Text("Delete Entry", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.titleLarge) },
-                text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.bodyLarge) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.deleteAuthCode(card)
-                        codeToDelete = null
-                    }) {
-                        Text("delete", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { codeToDelete = null }) {
-                        Text("cancel", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
-                    }
+                codeToDelete?.let { card ->
+                    AlertDialog(
+                        onDismissRequest = { codeToDelete = null },
+                        title = { Text("Delete Entry", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.titleLarge) },
+                        text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.bodyLarge) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                viewModel.deleteAuthCode(card)
+                                codeToDelete = null
+                            }) {
+                                Text("delete", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { codeToDelete = null }) {
+                                Text("cancel", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
+                            }
+                        }
+                    )
                 }
-            )
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Authentool(
+fun AuthGrid(
     viewModel: MainViewModel,
     onShowAddDialogChange: (Boolean) -> Unit,
     onCodeToDeleteChange: (AuthCardData?) -> Unit
@@ -138,7 +170,7 @@ fun Authentool(
     val countdownProgress by viewModel.countdownProgress
     val animatedProgress by animateFloatAsState(
         targetValue = countdownProgress,
-        animationSpec = tween(durationMillis = 62, easing = LinearEasing)
+        animationSpec = tween(durationMillis = 100, easing = LinearEasing)
     )
     val codes = viewModel.codesState.value
     val colorScheme = MaterialTheme.customColorScheme
@@ -148,34 +180,27 @@ fun Authentool(
 
     BackHandler(enabled = editingIndex == null) { /* ignore */ }
 
-    Scaffold(
-        topBar = {
-            Column {
-                TopAppBar(
-                    title = { Text("Authentool", color = colorScheme.TopBarText, style = MaterialTheme.typography.headlineLarge) },
-                    actions = {
-                        IconButton(onClick = { onShowAddDialogChange(true) }) {
-                            Icon(Icons.Default.Add, contentDescription = "add entry", tint = colorScheme.TopBarText)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = colorScheme.TopBarBackground)
-                )
-                if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
-                    LinearProgressIndicator(
-                        progress = { animatedProgress },
-                        modifier = Modifier.fillMaxWidth().height(8.dp),
-                        color = colorScheme.ProgressFill,
-                        trackColor = colorScheme.ProgressTrack
-                    )
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Authentool", color = colorScheme.TopBarText, style = MaterialTheme.typography.headlineLarge) },
+            actions = {
+                IconButton(onClick = { onShowAddDialogChange(true) }) {
+                    Icon(Icons.Default.Add, contentDescription = "add entry", tint = colorScheme.TopBarText)
                 }
-            }
-        },
-        modifier = Modifier.fillMaxSize()
-    ) { paddingValues ->
+            },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = colorScheme.TopBarBackground)
+        )
+        if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
+            LinearProgressIndicator(
+                progress = { animatedProgress },
+                modifier = Modifier.fillMaxWidth().height(8.dp),
+                color = colorScheme.ProgressFill,
+                trackColor = colorScheme.ProgressTrack
+            )
+        }
         Surface(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
+                .weight(1f)
                 .pointerInput(editingIndex) {
                     if (editingIndex != null) {
                         detectTapGestures {
@@ -190,64 +215,51 @@ fun Authentool(
                 },
             color = colorScheme.AppBackground
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.weight(1f).padding(all = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    itemsIndexed(codes) { index, card ->
-                        AuthenticatorCard(
-                            card = card,
-                            textColor = colorScheme.CardName,
-                            cardBackground = colorScheme.CardBackground,
-                            highlightColor = colorScheme.CardHiBackground,
-                            isEditing = index == editingIndex,
-                            onLongPress = { editingIndex = index },
-                            onDeleteClick = { onCodeToDeleteChange(card) },
-                            moveActions = MoveActions(
-                                onMoveUp = {
-                                    viewModel.swapAuthCode(index, Direction.UP)
-                                    editedName?.let { name ->
-                                        if (name != card.name) {
-                                            viewModel.updateAuthCodeName(index, name)
-                                        }
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.padding(all = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                itemsIndexed(codes) { index, card ->
+                    AuthenticatorCard(
+                        card = card,
+                        textColor = colorScheme.CardName,
+                        cardBackground = colorScheme.CardBackground,
+                        highlightColor = colorScheme.CardHiBackground,
+                        isEditing = index == editingIndex,
+                        onLongPress = { editingIndex = index },
+                        onDeleteClick = { onCodeToDeleteChange(card) },
+                        moveActions = MoveActions(
+                            onMoveUp = {
+                                viewModel.swapAuthCode(index, Direction.UP)
+                                editedName?.let { name ->
+                                    if (name != card.name) {
+                                        viewModel.updateAuthCodeName(index, name)
                                     }
-                                    editingIndex = null
-                                },
-                                onMoveDown = {
-                                    viewModel.swapAuthCode(index, Direction.DOWN)
-                                    editedName?.let { name ->
-                                        if (name != card.name) {
-                                            viewModel.updateAuthCodeName(index, name)
-                                        }
-                                    }
-                                    editingIndex = null
-                                },
-                                onMoveLeft = {
-                                    viewModel.swapAuthCode(index, Direction.LEFT)
-                                    editedName?.let { name ->
-                                        if (name != card.name) {
-                                            viewModel.updateAuthCodeName(index, name)
-                                        }
-                                    }
-                                    editingIndex = null
-                                },
-                                onMoveRight = {
-                                    viewModel.swapAuthCode(index, Direction.RIGHT)
-                                    editedName?.let { name ->
-                                        if (name != card.name) {
-                                            viewModel.updateAuthCodeName(index, name)
-                                        }
-                                    }
-                                    editingIndex = null
                                 }
-                            ),
-                            onNameChanged = { newName -> editedName = newName },
-                            index = index,
-                            totalItems = codes.size,
-                            onEditingDismissed = {
+                                editingIndex = null
+                            },
+                            onMoveDown = {
+                                viewModel.swapAuthCode(index, Direction.DOWN)
+                                editedName?.let { name ->
+                                    if (name != card.name) {
+                                        viewModel.updateAuthCodeName(index, name)
+                                    }
+                                }
+                                editingIndex = null
+                            },
+                            onMoveLeft = {
+                                viewModel.swapAuthCode(index, Direction.LEFT)
+                                editedName?.let { name ->
+                                    if (name != card.name) {
+                                        viewModel.updateAuthCodeName(index, name)
+                                    }
+                                }
+                                editingIndex = null
+                            },
+                            onMoveRight = {
+                                viewModel.swapAuthCode(index, Direction.RIGHT)
                                 editedName?.let { name ->
                                     if (name != card.name) {
                                         viewModel.updateAuthCodeName(index, name)
@@ -255,18 +267,29 @@ fun Authentool(
                                 }
                                 editingIndex = null
                             }
-                        )
-                    }
-                }
-                if (COUNTDOWN_LOCATION == CountdownLocation.BOTTOM || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
-                    LinearProgressIndicator(
-                        progress = { animatedProgress },
-                        modifier = Modifier.fillMaxWidth().height(8.dp),
-                        color = colorScheme.ProgressFill,
-                        trackColor = colorScheme.ProgressTrack
+                        ),
+                        onNameChanged = { newName -> editedName = newName },
+                        index = index,
+                        totalItems = codes.size,
+                        onEditingDismissed = {
+                            editedName?.let { name ->
+                                if (name != card.name) {
+                                    viewModel.updateAuthCodeName(index, name)
+                                }
+                            }
+                            editingIndex = null
+                        }
                     )
                 }
             }
+        }
+        if (COUNTDOWN_LOCATION == CountdownLocation.BOTTOM || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
+            LinearProgressIndicator(
+                progress = { animatedProgress },
+                modifier = Modifier.fillMaxWidth().height(8.dp),
+                color = colorScheme.ProgressFill,
+                trackColor = colorScheme.ProgressTrack
+            )
         }
     }
 }
@@ -463,14 +486,8 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                                 seed.isBlank() -> errorMessage = "Seed cannot be empty."
                                 !isValidBase32(seed) -> errorMessage = "Seed must be valid Base32 (A-Z, 2-7)."
                                 else -> {
-                                    try {
-                                        onAdd(name, seed)
-                                        errorMessage = null
-                                    } catch (e: IllegalArgumentException) {
-                                        errorMessage = "Invalid Base32 seed: ${e.message}"
-                                    } catch (e: Exception) {
-                                        errorMessage = "Unable to add entry: ${e.message}"
-                                    }
+                                    onAdd(name, seed)
+                                    errorMessage = null
                                 }
                             }
                         }
