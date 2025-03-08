@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -15,26 +17,28 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-@Serializable
-data class AuthCode(
-    val id: Int,
-    val name: String,
-    val seed: String,
-    val code: String = "", // transient, not serialized
-    val period: Int = 30,  // transient
-    val digits: Int = 6,   // transient
-    @kotlinx.serialization.Transient // explicitly exclude from serialization
-    val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seed))
-)
+data class AuthCardData(val name: String, val seed: String) {
+    private val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seed))
+    var totpCode by mutableStateOf(generateTotp())
+
+    fun updateTotp() {
+        totpCode = generator.generateCode()
+    }
+
+    private fun generateTotp(): String {
+        return generator.generateCode()
+    }
+}
 
 @SuppressLint("StaticFieldLeak")  // safe because we use application context
 class MainViewModel(private val context: Context) : ViewModel() {
     val countdownProgress: MutableState<Float> = mutableFloatStateOf(1f)
-    val authentoolCodes: MutableState<List<AuthCode>> = mutableStateOf(emptyList())
+    private val authentoolCodes: List<AuthCardData> = mutableListOf()
+    val codesState: MutableState<List<AuthCardData>> = mutableStateOf(authentoolCodes)
+
     val themeMode: ThemeMode
         get() = ThemeMode.valueOf(prefs.getString("theme_preference", "SYSTEM") ?: "SYSTEM")
 
@@ -58,15 +62,18 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private fun loadCodes() {
         val json = prefs.getString("auth_codes_list", "[]") ?: "[]"
-        authentoolCodes.value = Json.decodeFromString<List<AuthCode>>(json).map {
-            it.copy(code = it.generator.generateCode())
-        }
-        // Compute nextId from loaded data
-        nextId = authentoolCodes.value.maxOfOrNull { it.id }?.plus(1) ?: 1
+        val loadedPairs = Json.decodeFromString<List<Pair<String, String>>>(json)
+        authentoolCodes as MutableList<AuthCardData>
+        authentoolCodes.clear()
+        authentoolCodes.addAll(loadedPairs.map { AuthCardData(it.first, it.second) })
+        codesState.value = authentoolCodes
+        // nextId not needed anymore, but kept for potential future use
+        nextId = authentoolCodes.size + 1
     }
 
     private fun saveCodes() {
-        val json = Json.encodeToString(authentoolCodes.value)
+        val pairs = authentoolCodes.map { it.name to it.seed }
+        val json = Json.encodeToString(pairs)
         prefs.edit { putString("auth_codes_list", json) }
     }
 
@@ -74,35 +81,37 @@ class MainViewModel(private val context: Context) : ViewModel() {
         countdownJob?.cancel()
         countdownJob = viewModelScope.launch {
             while (isActive) {
-                val seconds = System.currentTimeMillis() / 1000 % 30
-                val progress = 1f - (seconds / 30f)
+                val millis = System.currentTimeMillis()
+                val seconds = (millis / 1000) % 30
+                val millisFraction = (millis % 1000) / 1000f
+                val progress = 1f - ((seconds + millisFraction) / 30f)
                 countdownProgress.value = progress
-
-                if (seconds == 0L) {
+                if (seconds == 0L && millisFraction < 0.05f) {
                     updateCodes()
                 }
-                delay(1000)
+                delay(64) // 10 updates per second
             }
         }
     }
 
     private fun updateCodes() {
-        authentoolCodes.value = authentoolCodes.value.map {
-            it.copy(code = it.generator.generateCode())
+        for (card in authentoolCodes) {
+            card.updateTotp()
         }
     }
 
     fun addAuthCode(name: String, seed: String) {
-        val newCode = AuthCode(id = nextId, name = name, seed = seed).let {
-            it.copy(code = it.generator.generateCode())
-        }
-        authentoolCodes.value = authentoolCodes.value + newCode
-        nextId++ // Increment after use
+        val newCard = AuthCardData(name, seed)
+        authentoolCodes as MutableList<AuthCardData>
+        authentoolCodes.add(newCard)
+        codesState.value = authentoolCodes
         saveCodes()
     }
 
-    fun deleteAuthCode(code: AuthCode) {
-        authentoolCodes.value = authentoolCodes.value.filter { it.id != code.id }
+    fun deleteAuthCode(cardToDelete: AuthCardData) {
+        authentoolCodes as MutableList<AuthCardData>
+        authentoolCodes.remove(cardToDelete)
+        codesState.value = authentoolCodes
         saveCodes()
     }
 
@@ -113,34 +122,34 @@ class MainViewModel(private val context: Context) : ViewModel() {
             Direction.LEFT -> index - 1
             Direction.RIGHT -> index + 1
         }
-        if (toIndex < 0 || toIndex >= authentoolCodes.value.size || index == toIndex) return
+        if (toIndex < 0 || toIndex >= authentoolCodes.size || index == toIndex) return
         when (direction) {
             Direction.LEFT -> if (index % 2 == 0) return
             Direction.RIGHT -> if (index % 2 != 0) return
             else -> {}
         }
-        val updatedList = authentoolCodes.value.toMutableList().apply {
-            val temp = this[index]
-            this[index] = this[toIndex]
-            this[toIndex] = temp
-        }
-        authentoolCodes.value = updatedList
+        authentoolCodes as MutableList<AuthCardData>
+        val temp = authentoolCodes[index]
+        authentoolCodes[index] = authentoolCodes[toIndex]
+        authentoolCodes[toIndex] = temp
+        codesState.value = authentoolCodes
         saveCodes()
     }
 
     fun updateAuthCodeName(index: Int, newName: String) {
-        if (index < 0 || index >= authentoolCodes.value.size || newName.isBlank()) return
-        val updatedList = authentoolCodes.value.toMutableList().apply {
-            val oldCode = this[index]
-            this[index] = oldCode.copy(name = newName)
-        }
-        authentoolCodes.value = updatedList
+        if (index < 0 || index >= authentoolCodes.size || newName.isBlank()) return
+        authentoolCodes as MutableList<AuthCardData>
+        val oldCard = authentoolCodes[index]
+        authentoolCodes[index] = AuthCardData(newName, oldCard.seed)
+        codesState.value = authentoolCodes
         saveCodes()
     }
 
     override fun onCleared() {
         countdownJob?.cancel()
-        authentoolCodes.value = emptyList() // Clear sensitive data
+        authentoolCodes as MutableList<AuthCardData>
+        authentoolCodes.clear()
+        codesState.value = authentoolCodes
         super.onCleared()
     }
 }

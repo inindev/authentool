@@ -87,23 +87,58 @@ fun MainActivityContent(viewModel: MainViewModel) {
         ThemeMode.DAY -> false
         ThemeMode.NIGHT -> true
     }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var codeToDelete by remember { mutableStateOf<AuthCardData?>(null) }
+
     AppColorTheme(darkTheme = darkTheme, dynamicColor = false) {
-        Authentool(viewModel = viewModel)
+        Authentool(
+            viewModel = viewModel,
+            onShowAddDialogChange = { showAddDialog = it },
+            onCodeToDeleteChange = { codeToDelete = it }
+        )
+        if (showAddDialog) {
+            AddEntryDialog(
+                onDismiss = { showAddDialog = false },
+                onAdd = { name, seed ->
+                    viewModel.addAuthCode(name, seed)
+                    showAddDialog = false
+                }
+            )
+        }
+        codeToDelete?.let { card ->
+            AlertDialog(
+                onDismissRequest = { codeToDelete = null },
+                title = { Text("Delete Entry", color = MaterialTheme.customColorScheme.AppText) },
+                text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.deleteAuthCode(card)
+                        codeToDelete = null
+                    }) {
+                        Text("delete", color = MaterialTheme.customColorScheme.CardTotp)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { codeToDelete = null }) {
+                        Text("cancel", color = MaterialTheme.customColorScheme.CardTotp)
+                    }
+                }
+            )
+        }
     }
 }
 
-/**
- * Main composable for the Authentool app, displaying a grid of authenticator cards.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Authentool(viewModel: MainViewModel) {
+fun Authentool(
+    viewModel: MainViewModel,
+    onShowAddDialogChange: (Boolean) -> Unit,
+    onCodeToDeleteChange: (AuthCardData?) -> Unit
+) {
     val countdownProgress = viewModel.countdownProgress.value
-    val codes = viewModel.authentoolCodes.value
+    val codes = viewModel.codesState.value
     val colorScheme = MaterialTheme.customColorScheme
 
-    var showAddDialog by remember { mutableStateOf(false) }
-    var codeToDelete by remember { mutableStateOf<AuthCode?>(null) }
     var editingIndex by remember { mutableStateOf<Int?>(null) }
     var editedName by remember { mutableStateOf<String?>(null) }
 
@@ -115,7 +150,7 @@ fun Authentool(viewModel: MainViewModel) {
                 TopAppBar(
                     title = { Text("Authentool", color = colorScheme.TopBarText) },
                     actions = {
-                        IconButton(onClick = { showAddDialog = true }) {
+                        IconButton(onClick = { onShowAddDialogChange(true) }) {
                             Icon(Icons.Default.Add, contentDescription = "add entry", tint = colorScheme.TopBarText)
                         }
                     },
@@ -158,20 +193,20 @@ fun Authentool(viewModel: MainViewModel) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    itemsIndexed(codes) { index, code ->
+                    itemsIndexed(codes) { index, card ->
                         AuthenticatorCard(
-                            code = code,
+                            card = card,
                             textColor = colorScheme.CardName,
                             cardBackground = colorScheme.CardBackground,
                             highlightColor = colorScheme.CardHiBackground,
                             isEditing = index == editingIndex,
                             onLongPress = { editingIndex = index },
-                            onDeleteClick = { codeToDelete = code },
+                            onDeleteClick = { onCodeToDeleteChange(card) },
                             moveActions = MoveActions(
                                 onMoveUp = {
                                     viewModel.swapAuthCode(index, Direction.UP)
                                     editedName?.let { name ->
-                                        if (name != code.name) {
+                                        if (name != card.name) {
                                             viewModel.updateAuthCodeName(index, name)
                                         }
                                     }
@@ -180,7 +215,7 @@ fun Authentool(viewModel: MainViewModel) {
                                 onMoveDown = {
                                     viewModel.swapAuthCode(index, Direction.DOWN)
                                     editedName?.let { name ->
-                                        if (name != code.name) {
+                                        if (name != card.name) {
                                             viewModel.updateAuthCodeName(index, name)
                                         }
                                     }
@@ -189,7 +224,7 @@ fun Authentool(viewModel: MainViewModel) {
                                 onMoveLeft = {
                                     viewModel.swapAuthCode(index, Direction.LEFT)
                                     editedName?.let { name ->
-                                        if (name != code.name) {
+                                        if (name != card.name) {
                                             viewModel.updateAuthCodeName(index, name)
                                         }
                                     }
@@ -198,7 +233,7 @@ fun Authentool(viewModel: MainViewModel) {
                                 onMoveRight = {
                                     viewModel.swapAuthCode(index, Direction.RIGHT)
                                     editedName?.let { name ->
-                                        if (name != code.name) {
+                                        if (name != card.name) {
                                             viewModel.updateAuthCodeName(index, name)
                                         }
                                     }
@@ -210,7 +245,7 @@ fun Authentool(viewModel: MainViewModel) {
                             totalItems = codes.size,
                             onEditingDismissed = {
                                 editedName?.let { name ->
-                                    if (name != code.name) {
+                                    if (name != card.name) {
                                         viewModel.updateAuthCodeName(index, name)
                                     }
                                 }
@@ -229,38 +264,6 @@ fun Authentool(viewModel: MainViewModel) {
                 }
             }
         }
-    }
-
-    if (showAddDialog) {
-        AddEntryDialog(
-            onDismiss = { showAddDialog = false },
-            onAdd = { name, seed ->
-                viewModel.addAuthCode(name, seed)
-                showAddDialog = false
-            }
-        )
-    }
-
-    codeToDelete?.let { code ->
-        AlertDialog(
-            onDismissRequest = { codeToDelete = null },
-            title = { Text("Delete Entry", color = colorScheme.AppText) },
-            text = { Text("Are you sure you want to delete ${code.name}?", color = colorScheme.AppText) },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.deleteAuthCode(code)
-                    codeToDelete = null
-                    editingIndex = null
-                }) {
-                    Text("delete", color = colorScheme.CardTotp)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { codeToDelete = null }) {
-                    Text("cancel", color = colorScheme.CardTotp)
-                }
-            }
-        )
     }
 }
 
@@ -281,7 +284,7 @@ data class MoveActions(
  */
 @Composable
 fun AuthenticatorCard(
-    code: AuthCode,
+    card: AuthCardData,
     textColor: Color,
     cardBackground: Color,
     highlightColor: Color,
@@ -295,7 +298,7 @@ fun AuthenticatorCard(
     onEditingDismissed: () -> Unit
 ) {
     val colors = MaterialTheme.customColorScheme
-    var editedName by remember(isEditing) { mutableStateOf(code.name) }
+    var editedName by remember(isEditing) { mutableStateOf(card.name) }
     var isHighlighted by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
@@ -312,7 +315,7 @@ fun AuthenticatorCard(
                 detectTapGestures(
                     onTap = {
                         isHighlighted = true
-                        val codeWithoutSpaces = code.code.replace("\\s".toRegex(), "")
+                        val codeWithoutSpaces = card.totpCode.replace("\\s".toRegex(), "")
                         clipboardManager.setText(AnnotatedString(codeWithoutSpaces))
                         coroutineScope.launch {
                             delay(8000)  // long highlight for easy reference
@@ -354,7 +357,7 @@ fun AuthenticatorCard(
                     }
                 } else {
                     Text(
-                        text = code.name,
+                        text = card.name,
                         color = if (isHighlighted) colors.CardHiName else textColor,
                         fontSize = 14.sp,
                         fontFamily = FontFamily(Font(R.font.lato_regular))
@@ -363,7 +366,7 @@ fun AuthenticatorCard(
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = formatCode(code.code),
+                text = formatCode(card.totpCode),
                 color = if (isHighlighted) colors.CardHiTotp else colors.CardTotp,
                 fontSize = 36.sp,
                 fontFamily = FontFamily(Font(R.font.lato_bold)),
@@ -461,8 +464,10 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                                     try {
                                         onAdd(name, seed)
                                         errorMessage = null
+                                    } catch (e: IllegalArgumentException) {
+                                        errorMessage = "Invalid Base32 seed: ${e.message}"
                                     } catch (e: Exception) {
-                                        errorMessage = "Unable to add entry. Please check the seed and try again."
+                                        errorMessage = "Unable to add entry: ${e.message}"
                                     }
                                 }
                             }
@@ -494,5 +499,5 @@ private fun isValidBase32(seed: String): Boolean {
     val cleanedSeed = seed.uppercase().filter { it != '=' } // Ignore padding for initial check
     return cleanedSeed.isNotEmpty() &&
             cleanedSeed.all { it in alphabet } &&
-            (cleanedSeed.length % 8 == 0 || cleanedSeed.length % 8 in listOf(2, 4, 5, 7)) // Valid Base32 lengths
+            (cleanedSeed.length % 8 == 0 || cleanedSeed.length % 8 in listOf(2, 4, 5, 7)) // valid Base32 lengths
 }

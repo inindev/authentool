@@ -7,10 +7,10 @@ import kotlin.math.pow
 
 /**
  * Generates Time-Based One-Time Passwords (TOTP) per RFC 6238 using HMAC-SHA1.
- * Requires a valid secret key provided by the caller.
+ * Requires a valid seed provided by the caller.
  */
 class TotpGenerator(
-    private val secretBytes: ByteArray,  // No default value
+    private val seedBytes: ByteArray,
     private val timeStep: Long = 30L,
     private val digits: Int = 6
 ) {
@@ -25,8 +25,11 @@ class TotpGenerator(
          */
         fun decodeBase32(base32: String): ByteArray {
             val cleaned = base32.uppercase().filter { it in ALPHABET }
+            if (cleaned.isEmpty()) throw IllegalArgumentException("Base32 string is empty after cleaning")
             val bits = cleaned.map { ALPHABET.indexOf(it).toString(2).padStart(5, '0') }.joinToString("")
-            val bytes = (0 until bits.length / 8).map {
+            val byteLength = bits.length / 8
+            if (bits.length % 8 != 0) throw IllegalArgumentException("Base32 string length (${cleaned.length}) must encode to whole bytes")
+            val bytes = (0 until byteLength).map {
                 bits.substring(it * 8, (it + 1) * 8).toInt(2).toByte()
             }
             return bytes.toByteArray()
@@ -42,7 +45,7 @@ class TotpGenerator(
         val counterBytes = ByteBuffer.allocate(8).putLong(counter).array()
 
         val hmacSha1 = Mac.getInstance("HmacSHA1").apply {
-            init(SecretKeySpec(secretBytes, "HmacSHA1"))
+            init(SecretKeySpec(seedBytes, "HmacSHA1"))
         }
         val hash = hmacSha1.doFinal(counterBytes)
 
