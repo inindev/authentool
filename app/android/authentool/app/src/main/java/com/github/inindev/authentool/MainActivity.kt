@@ -4,6 +4,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -45,11 +48,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -108,19 +108,19 @@ fun MainActivityContent(viewModel: MainViewModel) {
         codeToDelete?.let { card ->
             AlertDialog(
                 onDismissRequest = { codeToDelete = null },
-                title = { Text("Delete Entry", color = MaterialTheme.customColorScheme.AppText) },
-                text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText) },
+                title = { Text("Delete Entry", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.titleLarge) },
+                text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.bodyLarge) },
                 confirmButton = {
                     TextButton(onClick = {
                         viewModel.deleteAuthCode(card)
                         codeToDelete = null
                     }) {
-                        Text("delete", color = MaterialTheme.customColorScheme.CardTotp)
+                        Text("delete", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { codeToDelete = null }) {
-                        Text("cancel", color = MaterialTheme.customColorScheme.CardTotp)
+                        Text("cancel", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
                     }
                 }
             )
@@ -135,7 +135,11 @@ fun Authentool(
     onShowAddDialogChange: (Boolean) -> Unit,
     onCodeToDeleteChange: (AuthCardData?) -> Unit
 ) {
-    val countdownProgress = viewModel.countdownProgress.value
+    val countdownProgress by viewModel.countdownProgress
+    val animatedProgress by animateFloatAsState(
+        targetValue = countdownProgress,
+        animationSpec = tween(durationMillis = 62, easing = LinearEasing)
+    )
     val codes = viewModel.codesState.value
     val colorScheme = MaterialTheme.customColorScheme
 
@@ -148,7 +152,7 @@ fun Authentool(
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text("Authentool", color = colorScheme.TopBarText) },
+                    title = { Text("Authentool", color = colorScheme.TopBarText, style = MaterialTheme.typography.headlineLarge) },
                     actions = {
                         IconButton(onClick = { onShowAddDialogChange(true) }) {
                             Icon(Icons.Default.Add, contentDescription = "add entry", tint = colorScheme.TopBarText)
@@ -158,7 +162,7 @@ fun Authentool(
                 )
                 if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
                     LinearProgressIndicator(
-                        progress = { countdownProgress },
+                        progress = { animatedProgress },
                         modifier = Modifier.fillMaxWidth().height(8.dp),
                         color = colorScheme.ProgressFill,
                         trackColor = colorScheme.ProgressTrack
@@ -256,7 +260,7 @@ fun Authentool(
                 }
                 if (COUNTDOWN_LOCATION == CountdownLocation.BOTTOM || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
                     LinearProgressIndicator(
-                        progress = { countdownProgress },
+                        progress = { animatedProgress },
                         modifier = Modifier.fillMaxWidth().height(8.dp),
                         color = colorScheme.ProgressFill,
                         trackColor = colorScheme.ProgressTrack
@@ -318,7 +322,7 @@ fun AuthenticatorCard(
                         val codeWithoutSpaces = card.totpCode.replace("\\s".toRegex(), "")
                         clipboardManager.setText(AnnotatedString(codeWithoutSpaces))
                         coroutineScope.launch {
-                            delay(8000)  // long highlight for easy reference
+                            delay(8000)
                             isHighlighted = false
                         }
                     },
@@ -344,7 +348,7 @@ fun AuthenticatorCard(
                             editedName = newValue
                             onNameChanged(newValue)
                         },
-                        label = { Text("name", color = colors.AppText) },
+                        label = { Text("name", color = colors.AppText, style = MaterialTheme.typography.bodyLarge) },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -359,8 +363,7 @@ fun AuthenticatorCard(
                     Text(
                         text = card.name,
                         color = if (isHighlighted) colors.CardHiName else textColor,
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily(Font(R.font.lato_regular))
+                        style = MaterialTheme.typography.bodyLarge
                     )
                 }
             }
@@ -368,8 +371,7 @@ fun AuthenticatorCard(
             Text(
                 text = formatCode(card.totpCode),
                 color = if (isHighlighted) colors.CardHiTotp else colors.CardTotp,
-                fontSize = 36.sp,
-                fontFamily = FontFamily(Font(R.font.lato_bold)),
+                style = MaterialTheme.typography.displayLarge,
                 textAlign = TextAlign.Start
             )
             if (isEditing) {
@@ -415,12 +417,12 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
             color = colors.AppBackground
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Add Authenticator Entry", fontSize = 20.sp, color = colors.AppText)
+                Text("Add Authenticator Entry", style = MaterialTheme.typography.titleLarge, color = colors.AppText)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("name", color = colors.AppText) },
+                    label = { Text("name", color = colors.AppText, style = MaterialTheme.typography.bodyLarge) },
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
@@ -431,7 +433,7 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                 OutlinedTextField(
                     value = seed,
                     onValueChange = { seed = it },
-                    label = { Text("base32 seed", color = colors.AppText) },
+                    label = { Text("base32 seed", color = colors.AppText, style = MaterialTheme.typography.bodyLarge) },
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
@@ -444,14 +446,14 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                     Text(
                         text = message,
                         color = MaterialTheme.colorScheme.error,
-                        fontSize = 14.sp,
+                        style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                     TextButton(onClick = onDismiss) {
-                        Text("cancel", color = colors.CardTotp)
+                        Text("cancel", color = colors.CardTotp, style = MaterialTheme.typography.labelLarge)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     TextButton(
@@ -473,7 +475,7 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                             }
                         }
                     ) {
-                        Text("add", color = colors.CardTotp)
+                        Text("add", color = colors.CardTotp, style = MaterialTheme.typography.labelLarge)
                     }
                 }
             }
@@ -490,14 +492,10 @@ private fun formatCode(code: String): String {
     }
 }
 
-/**
- * Validates that a string is a valid Base32-encoded seed.
- * Ensures it only contains characters from the Base32 alphabet and has a length compatible with Base32 decoding.
- */
 private fun isValidBase32(seed: String): Boolean {
     val alphabet = TotpGenerator.ALPHABET
-    val cleanedSeed = seed.uppercase().filter { it != '=' } // Ignore padding for initial check
+    val cleanedSeed = seed.uppercase().filter { it != '=' }
     return cleanedSeed.isNotEmpty() &&
             cleanedSeed.all { it in alphabet } &&
-            (cleanedSeed.length % 8 == 0 || cleanedSeed.length % 8 in listOf(2, 4, 5, 7)) // valid Base32 lengths
+            (cleanedSeed.length % 8 == 0 || cleanedSeed.length % 8 in listOf(2, 4, 5, 7))
 }
