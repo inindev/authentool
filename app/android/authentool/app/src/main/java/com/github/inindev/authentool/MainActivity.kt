@@ -4,9 +4,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -16,12 +16,12 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -41,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,17 +53,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.inindev.authentool.ui.theme.AppColorTheme
 import com.github.inindev.authentool.ui.theme.customColorScheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
 
 // countdown bar placement
 private enum class CountdownLocation {
@@ -83,6 +87,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainActivityContent(viewModel: MainViewModel) {
     val systemDarkTheme = isSystemInDarkTheme()
@@ -93,7 +98,7 @@ fun MainActivityContent(viewModel: MainViewModel) {
     }
     var showAddDialog by remember { mutableStateOf(false) }
     var codeToDelete by remember { mutableStateOf<AuthCardData?>(null) }
-    val errorMessage by viewModel.errorMessage // Observe error state
+    val errorMessage by viewModel.errorMessage
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -105,66 +110,86 @@ fun MainActivityContent(viewModel: MainViewModel) {
                     message = message,
                     duration = SnackbarDuration.Long  // 10s for visibility
                 )
-                // viewModel.errorMessage.value = null  // clear error after display
+                viewModel.errorMessage.value = null  // clear error after display
             }
         }
     }
 
     AppColorTheme(darkTheme = darkTheme, dynamicColor = false) {
-        Scaffold(
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            modifier = Modifier.fillMaxSize()
-        ) { paddingValues ->
-            Surface(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues),
-                color = MaterialTheme.customColorScheme.AppBackground
-            ) {
-                AuthGrid(
-                    viewModel = viewModel,
-                    onShowAddDialogChange = { showAddDialog = it },
-                    onCodeToDeleteChange = { codeToDelete = it }
-                )
-                if (showAddDialog) {
-                    AddEntryDialog(
-                        onDismiss = { showAddDialog = false },
-                        onAdd = { name, seed ->
-                            viewModel.addAuthCode(name, seed)
-                            showAddDialog = false
+        // add density override
+        val targetDensity = 320f / 160f // target scaling factor for 320 dpi (Galaxy S23 Plus)
+        val currentDensity = LocalDensity.current.density
+        val adjustedDensity = if (currentDensity > targetDensity) targetDensity else currentDensity
+
+        CompositionLocalProvider(
+            LocalDensity provides Density(density = adjustedDensity, fontScale = 1f)
+        ) {
+            Scaffold(
+                snackbarHost = { SnackbarHost(snackbarHostState) },
+                modifier = Modifier.fillMaxSize(),
+                topBar = {
+                    TopAppBar(
+                        title = { Text("Authentool", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.customColorScheme.TopBarText) },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.customColorScheme.TopBarBackground,
+                            titleContentColor = MaterialTheme.customColorScheme.TopBarText
+                        ),
+                        actions = {
+                            IconButton(onClick = { showAddDialog = true }) {
+                                Icon(Icons.Default.Add, contentDescription = "add entry", tint = MaterialTheme.customColorScheme.TopBarText)
+                            }
                         }
                     )
                 }
-                codeToDelete?.let { card ->
-                    AlertDialog(
-                        onDismissRequest = { codeToDelete = null },
-                        title = { Text("Delete Entry", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.titleLarge) },
-                        text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.bodyLarge) },
-                        confirmButton = {
-                            TextButton(onClick = {
-                                viewModel.deleteAuthCode(card)
-                                codeToDelete = null
-                            }) {
-                                Text("delete", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { codeToDelete = null }) {
-                                Text("cancel", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
-                            }
-                        }
+            ) { paddingValues ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues),
+                    color = MaterialTheme.customColorScheme.AppBackground
+                ) {
+                    AuthGrid(
+                        viewModel = viewModel,
+                        onCodeToDeleteChange = { codeToDelete = it }
                     )
+                    if (showAddDialog) {
+                        AddEntryDialog(
+                            onDismiss = { showAddDialog = false },
+                            onAdd = { name, seed ->
+                                viewModel.addAuthCode(name, seed)
+                                showAddDialog = false
+                            }
+                        )
+                    }
+                    codeToDelete?.let { card ->
+                        AlertDialog(
+                            onDismissRequest = { codeToDelete = null },
+                            title = { Text("Delete Entry", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.titleLarge) },
+                            text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.bodyLarge) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    viewModel.deleteAuthCode(card)
+                                    codeToDelete = null
+                                }) {
+                                    Text("delete", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { codeToDelete = null }) {
+                                    Text("cancel", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AuthGrid(
     viewModel: MainViewModel,
-    onShowAddDialogChange: (Boolean) -> Unit,
     onCodeToDeleteChange: (AuthCardData?) -> Unit
 ) {
     val countdownProgress by viewModel.countdownProgress
@@ -181,19 +206,12 @@ fun AuthGrid(
     BackHandler(enabled = editingIndex == null) { /* ignore */ }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("Authentool", color = colorScheme.TopBarText, style = MaterialTheme.typography.headlineLarge) },
-            actions = {
-                IconButton(onClick = { onShowAddDialogChange(true) }) {
-                    Icon(Icons.Default.Add, contentDescription = "add entry", tint = colorScheme.TopBarText)
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = colorScheme.TopBarBackground)
-        )
         if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
             LinearProgressIndicator(
                 progress = { animatedProgress },
-                modifier = Modifier.fillMaxWidth().height(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp),
                 color = colorScheme.ProgressFill,
                 trackColor = colorScheme.ProgressTrack
             )
@@ -286,7 +304,9 @@ fun AuthGrid(
         if (COUNTDOWN_LOCATION == CountdownLocation.BOTTOM || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
             LinearProgressIndicator(
                 progress = { animatedProgress },
-                modifier = Modifier.fillMaxWidth().height(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp),
                 color = colorScheme.ProgressFill,
                 trackColor = colorScheme.ProgressTrack
             )
@@ -295,7 +315,7 @@ fun AuthGrid(
 }
 
 /**
- * groups move-related actions for an authenticator card.
+ * Groups move-related actions for an authenticator card.
  */
 data class MoveActions(
     val onMoveUp: () -> Unit,
@@ -305,9 +325,7 @@ data class MoveActions(
 )
 
 /**
- * displays an authenticator card with a name, code, and editing controls.
- * when tapped, highlights the background and copies the code to the clipboard without spaces.
- * when long-pressed, enters editing mode with a text field and move/delete buttons.
+ * Displays an authenticator card with a name, code, and editing controls.
  */
 @Composable
 fun AuthenticatorCard(
@@ -376,7 +394,9 @@ fun AuthenticatorCard(
                         modifier = Modifier.weight(1f)
                     )
                     Box(
-                        modifier = Modifier.padding(start = 8.dp, bottom = 8.dp).align(Alignment.Top)
+                        modifier = Modifier
+                            .padding(start = 8.dp, bottom = 8.dp)
+                            .align(Alignment.Top)
                     ) {
                         IconButton(onClick = onDeleteClick) {
                             Icon(Icons.Default.Cancel, contentDescription = "delete", tint = MaterialTheme.colorScheme.error)
@@ -422,8 +442,7 @@ fun AuthenticatorCard(
 }
 
 /**
- * dialog for adding a new authenticator entry with name and seed fields.
- * catches exceptions on "add" and displays an error message, allowing the user to fix or cancel.
+ * Dialog for adding a new authenticator entry with name and seed fields.
  */
 @Composable
 fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
@@ -509,6 +528,7 @@ private fun formatCode(code: String): String {
     }
 }
 
+// validate Base32 seed
 private fun isValidBase32(seed: String): Boolean {
     val alphabet = TotpGenerator.ALPHABET
     val cleanedSeed = seed.uppercase().filter { it != '=' }
