@@ -1,12 +1,19 @@
 package com.github.inindev.authentool
 
+import android.content.Context
+import android.content.Intent
 import android.os.Bundle
+import android.os.storage.StorageManager
+import android.provider.DocumentsContract
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -26,6 +33,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +63,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
@@ -61,14 +71,23 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpOffset
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.getSystemService
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.snapshotFlow
+import androidx.core.net.toUri
 import com.github.inindev.authentool.ui.theme.AppColorTheme
 import com.github.inindev.authentool.ui.theme.customColorScheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
+
+private const val HIGHLIGHT_DELAY_MS = 8000L
+private const val ERROR_DISPLAY_DURATION_MS = 2000L
+private const val ANIMATION_DURATION_MS = 100
 
 // countdown bar placement
 private enum class CountdownLocation {
@@ -92,27 +111,26 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainActivityContent(viewModel: MainViewModel) {
+    val uiState by viewModel.uiState.collectAsState()
     val systemDarkTheme = isSystemInDarkTheme()
-    val themeMode by viewModel.themeMode // Now a State object
-    val darkTheme = when (themeMode) {
+    val darkTheme = when (uiState.themeMode) {
         ThemeMode.SYSTEM -> systemDarkTheme
         ThemeMode.DAY -> false
         ThemeMode.NIGHT -> true
     }
     var showAddDialog by remember { mutableStateOf(false) }
     var codeToDelete by remember { mutableStateOf<AuthCardData?>(null) }
-    val errorMessage by viewModel.errorMessage
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(errorMessage) {
-        errorMessage?.let { message ->
+    LaunchedEffect(uiState.errorMessage) {
+        uiState.errorMessage?.let { message ->
             coroutineScope.launch {
                 snackbarHostState.showSnackbar(
                     message = message,
                     duration = SnackbarDuration.Long
                 )
-                viewModel.errorMessage.value = null
+                viewModel.clearError()
             }
         }
     }
@@ -169,7 +187,8 @@ fun MainActivityContent(viewModel: MainViewModel) {
                             text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.bodyLarge) },
                             confirmButton = {
                                 TextButton(onClick = {
-                                    viewModel.deleteAuthCode(card)
+                                    val index = uiState.codes.indexOf(card)
+                                    if (index >= 0) viewModel.deleteAuthCode(index)
                                     codeToDelete = null
                                 }) {
                                     Text("delete", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
@@ -193,24 +212,118 @@ fun AuthGrid(
     viewModel: MainViewModel,
     onCodeToDeleteChange: (AuthCardData?) -> Unit
 ) {
-    val countdownProgress by viewModel.countdownProgress
+    val uiState by viewModel.uiState.collectAsState()
+    val countdownProgress = uiState.countdownProgress
     val animatedProgress by animateFloatAsState(
         targetValue = countdownProgress,
-        animationSpec = tween(durationMillis = 100, easing = LinearEasing)
+        animationSpec = tween(durationMillis = ANIMATION_DURATION_MS, easing = LinearEasing)
     )
-    val codes = viewModel.codesState.value
+    val codes = uiState.codes
     val colorScheme = MaterialTheme.customColorScheme
+    val context = LocalContext.current
+    val storageManager = context.getSystemService<StorageManager>()
+    val coroutineScope = rememberCoroutineScope()
+
+    // log recomposition only when codes change
+    LaunchedEffect(codes) {
+        Log.d("MainActivity", "authgrid: recomposing with ${codes.size} codes: ${codes.map { it.name }}")
+    }
 
     var editingIndex by remember { mutableStateOf<Int?>(null) }
     var editedName by remember { mutableStateOf<String?>(null) }
     var showSystemMenu by remember { mutableStateOf(false) }
     var menuOffset by remember { mutableStateOf(DpOffset(0.dp, 0.dp)) }
     var showThemeSubmenu by remember { mutableStateOf(false) }
+    var showBackupDialog by remember { mutableStateOf(false) }
+
+    // reset editingindex if it exceeds list size after deletion
+    LaunchedEffect(codes) {
+        val currentEditingIndex = editingIndex // snapshot the value
+        if (currentEditingIndex != null && currentEditingIndex >= codes.size) {
+            Log.d("MainActivity", "authgrid: resetting editingindex from $currentEditingIndex to null due to size=${codes.size}")
+            editingIndex = null // safe assignment
+        }
+    }
+
+    // state for storage info, initialized empty
+    var externalDirs by remember { mutableStateOf(emptyList<File>()) }
+    val storageVolumesState = remember { mutableStateOf(emptyList<Pair<File, Boolean>>()) }
+    var storageVolumes by storageVolumesState
+
+    // custom contract to set initial uri to removable storage
+    val saveFileLauncher = rememberLauncherForActivityResult(
+        object : ActivityResultContracts.CreateDocument("application/json") {
+            override fun createIntent(context: Context, input: String): Intent {
+                val intent = super.createIntent(context, input)
+                val removableVolume = storageVolumes.firstOrNull { it.second }
+                removableVolume?.let { (dir, _) ->
+                    val volume = storageManager?.storageVolumes?.find { it.directory == dir }
+                    volume?.uuid?.let { uuid ->
+                        intent.putExtra(
+                            DocumentsContract.EXTRA_INITIAL_URI,
+                            "content://com.android.externalstorage.documents/document/primary:$uuid".toUri()
+                        )
+                    }
+                }
+                return intent
+            }
+        }
+    ) { uri ->
+        uri?.let {
+            viewModel.exportSeeds()?.let { seedsJson ->
+                context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                    outputStream.write(seedsJson.toByteArray())
+                }
+                coroutineScope.launch {
+                    viewModel.setError("Backup saved to USB.")
+                    delay(ERROR_DISPLAY_DURATION_MS)
+                    viewModel.clearError()
+                }
+            }
+            showBackupDialog = false
+        } ?: run {
+            coroutineScope.launch {
+                viewModel.setError("Failed to save backup.")
+                delay(ERROR_DISPLAY_DURATION_MS)
+                viewModel.clearError()
+            }
+        }
+    }
+
+    // implicit refresh when dialog opens
+    LaunchedEffect(showBackupDialog) {
+        if (showBackupDialog) {
+            externalDirs = context.getExternalFilesDirs(null).filterNotNull().toList()
+            storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
+                volume.directory?.let { it to volume.isRemovable }
+            } ?: emptyList()
+        }
+    }
+
+    // poll storage changes efficiently while dialog is open
+    LaunchedEffect(showBackupDialog) {
+        if (showBackupDialog) {
+            snapshotFlow {
+                val newExternalDirs = context.getExternalFilesDirs(null).filterNotNull().toList()
+                val newStorageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
+                    volume.directory?.let { it to volume.isRemovable }
+                } ?: emptyList()
+                newExternalDirs to newStorageVolumes
+            }.collect { (newExternalDirs, newStorageVolumes) ->
+                if (newExternalDirs != externalDirs || newStorageVolumes != storageVolumes) {
+                    externalDirs = newExternalDirs
+                    storageVolumes = newStorageVolumes
+                }
+            }
+        }
+    }
 
     BackHandler(enabled = editingIndex == null && !showSystemMenu) { /* ignore */ }
-    BackHandler(enabled = showSystemMenu) {
+    BackHandler(enabled = showSystemMenu || showBackupDialog) {
         if (showThemeSubmenu) {
             showThemeSubmenu = false
+        } else if (showBackupDialog) {
+            showBackupDialog = false
         } else {
             showSystemMenu = false
         }
@@ -220,17 +333,13 @@ fun AuthGrid(
         if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
             LinearProgressIndicator(
                 progress = { animatedProgress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp),
+                modifier = Modifier.fillMaxWidth().height(8.dp),
                 color = colorScheme.ProgressFill,
                 trackColor = colorScheme.ProgressTrack
             )
         }
         Surface(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
             color = colorScheme.AppBackground
         ) {
             Box {
@@ -262,7 +371,11 @@ fun AuthGrid(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    itemsIndexed(codes) { index, card ->
+                    itemsIndexed(
+                        items = codes,
+                        key = { _, card -> "${card.name}-${card.seed}" } // stable key
+                    ) { index, card ->
+                        Log.d("MainActivity", "authgrid: rendering card index=$index, name=${card.name}")
                         AuthenticatorCard(
                             card = card,
                             textColor = colorScheme.CardName,
@@ -272,42 +385,10 @@ fun AuthGrid(
                             onLongPress = { editingIndex = index },
                             onDeleteClick = { onCodeToDeleteChange(card) },
                             moveActions = MoveActions(
-                                onMoveUp = {
-                                    viewModel.swapAuthCode(index, Direction.UP)
-                                    editedName?.let { name ->
-                                        if (name != card.name) {
-                                            viewModel.updateAuthCodeName(index, name)
-                                        }
-                                    }
-                                    editingIndex = null
-                                },
-                                onMoveDown = {
-                                    viewModel.swapAuthCode(index, Direction.DOWN)
-                                    editedName?.let { name ->
-                                        if (name != card.name) {
-                                            viewModel.updateAuthCodeName(index, name)
-                                        }
-                                    }
-                                    editingIndex = null
-                                },
-                                onMoveLeft = {
-                                    viewModel.swapAuthCode(index, Direction.LEFT)
-                                    editedName?.let { name ->
-                                        if (name != card.name) {
-                                            viewModel.updateAuthCodeName(index, name)
-                                        }
-                                    }
-                                    editingIndex = null
-                                },
-                                onMoveRight = {
-                                    viewModel.swapAuthCode(index, Direction.RIGHT)
-                                    editedName?.let { name ->
-                                        if (name != card.name) {
-                                            viewModel.updateAuthCodeName(index, name)
-                                        }
-                                    }
-                                    editingIndex = null
-                                }
+                                onMoveUp = { viewModel.swapAuthCode(index, Direction.UP); editingIndex = null },
+                                onMoveDown = { viewModel.swapAuthCode(index, Direction.DOWN); editingIndex = null },
+                                onMoveLeft = { viewModel.swapAuthCode(index, Direction.LEFT); editingIndex = null },
+                                onMoveRight = { viewModel.swapAuthCode(index, Direction.RIGHT); editingIndex = null }
                             ),
                             onNameChanged = { newName -> editedName = newName },
                             index = index,
@@ -324,70 +405,39 @@ fun AuthGrid(
                     }
                 }
                 if (showSystemMenu) {
-                    Card(
+                    DropdownMenu(
+                        expanded = true,
+                        onDismissRequest = { showSystemMenu = false },
+                        offset = menuOffset,
                         modifier = Modifier
-                            .offset { IntOffset(menuOffset.x.roundToPx(), menuOffset.y.roundToPx()) } // Lambda overload
-                            .wrapContentSize(),
-                        shape = RoundedCornerShape(4.dp),
-                        colors = CardDefaults.cardColors(containerColor = colorScheme.AppBackground),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                            .background(colorScheme.AppBackground)
+                            .width(IntrinsicSize.Max)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .width(IntrinsicSize.Max)
-                                .padding(vertical = 4.dp)
-                        ) {
-                            if (!showThemeSubmenu) {
-                                TextButton(
-                                    onClick = { showThemeSubmenu = true },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(36.dp)
-                                ) {
-                                    Text(
-                                        text = "Theme",
-                                        color = colorScheme.AppText,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                                TextButton(
-                                    onClick = { /* TODO: Add action */ },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(36.dp)
-                                ) {
-                                    Text(
-                                        text = "Future Item",
-                                        color = colorScheme.AppText,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                            } else {
-                                ThemeMode.entries.forEach { mode ->
-                                    TextButton(
-                                        onClick = {
-                                            viewModel.setThemeMode(mode)
-                                            showSystemMenu = false
-                                            showThemeSubmenu = false
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(36.dp)
-                                    ) {
+                        if (!showThemeSubmenu) {
+                            DropdownMenuItem(
+                                text = { Text("Theme", color = colorScheme.AppText, style = MaterialTheme.typography.bodyMedium) },
+                                onClick = { showThemeSubmenu = true },
+                                modifier = Modifier.height(48.dp)
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Backup", color = colorScheme.AppText, style = MaterialTheme.typography.bodyMedium) },
+                                onClick = { showBackupDialog = true; showSystemMenu = false },
+                                modifier = Modifier.height(48.dp)
+                            )
+                        } else {
+                            ThemeMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            if (viewModel.themeMode.value == mode) { // Use .value since themeMode is now State
+                                            if (uiState.themeMode == mode) {
                                                 Icon(
                                                     imageVector = Icons.Default.Check,
                                                     contentDescription = null,
                                                     tint = colorScheme.AppText,
-                                                    modifier = Modifier
-                                                        .size(20.dp)
-                                                        .padding(end = 8.dp)
+                                                    modifier = Modifier.size(20.dp).padding(end = 8.dp)
                                                 )
                                             } else {
                                                 Spacer(modifier = Modifier.width(28.dp))
@@ -399,24 +449,85 @@ fun AuthGrid(
                                                     ThemeMode.NIGHT -> "Dark"
                                                 },
                                                 color = colorScheme.AppText,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                modifier = Modifier.weight(1f)
+                                                style = MaterialTheme.typography.bodyMedium
                                             )
                                         }
-                                    }
-                                }
+                                    },
+                                    onClick = {
+                                        viewModel.setThemeMode(mode)
+                                        showSystemMenu = false
+                                        showThemeSubmenu = false
+                                    },
+                                    modifier = Modifier.height(48.dp)
+                                )
                             }
                         }
                     }
+                }
+                if (showBackupDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showBackupDialog = false },
+                        title = { Text("Backup to External Storage", color = colorScheme.AppText) },
+                        text = {
+                            Column {
+                                val removableVolumes = storageVolumes.filter { it.second }
+                                when {
+                                    removableVolumes.isEmpty() -> Text(
+                                        "No removable storage detected. Please insert a USB drive and press 'Retry'.",
+                                        color = colorScheme.AppText
+                                    )
+                                    removableVolumes.size == 1 -> {
+                                        val volume = storageManager?.storageVolumes?.find { it.directory == removableVolumes[0].first }
+                                        val volumeName = volume?.getDescription(context) ?: "Removable Storage"
+                                        Text(
+                                            "$volumeName detected. Press 'Save' to backup.",
+                                            color = colorScheme.AppText
+                                        )
+                                    }
+                                    else -> {
+                                        val volume = storageManager?.storageVolumes?.find { it.directory == removableVolumes[0].first }
+                                        val volumeName = volume?.getDescription(context) ?: "Removable Storage"
+                                        Text(
+                                            "Multiple removable storages detected. Using '$volumeName'. Press 'Save' to backup.",
+                                            color = colorScheme.AppText
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            val removableVolumes = storageVolumes.filter { it.second }
+                            if (removableVolumes.isNotEmpty()) {
+                                TextButton(onClick = {
+                                    saveFileLauncher.launch("authentool_seeds_${System.currentTimeMillis()}.json")
+                                }) {
+                                    Text("Save", color = colorScheme.CardTotp)
+                                }
+                            } else {
+                                TextButton(onClick = {
+                                    // retry: refresh storage volumes
+                                    externalDirs = context.getExternalFilesDirs(null).filterNotNull().toList()
+                                    storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
+                                        volume.directory?.let { it to volume.isRemovable }
+                                    } ?: emptyList()
+                                }) {
+                                    Text("Retry", color = colorScheme.CardTotp)
+                                }
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showBackupDialog = false }) {
+                                Text("Cancel", color = colorScheme.CardTotp)
+                            }
+                        }
+                    )
                 }
             }
         }
         if (COUNTDOWN_LOCATION == CountdownLocation.BOTTOM || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
             LinearProgressIndicator(
                 progress = { animatedProgress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp),
+                modifier = Modifier.fillMaxWidth().height(8.dp),
                 color = colorScheme.ProgressFill,
                 trackColor = colorScheme.ProgressTrack
             )
@@ -425,7 +536,7 @@ fun AuthGrid(
 }
 
 /**
- * Groups move-related actions for an authenticator card.
+ * groups move-related actions for an authenticator card.
  */
 data class MoveActions(
     val onMoveUp: () -> Unit,
@@ -435,7 +546,7 @@ data class MoveActions(
 )
 
 /**
- * Displays an authenticator card with a name, code, and editing controls.
+ * displays an authenticator card with a name, code, and editing controls.
  */
 @Composable
 fun AuthenticatorCard(
@@ -473,7 +584,7 @@ fun AuthenticatorCard(
                         val codeWithoutSpaces = card.totpCode.replace("\\s".toRegex(), "")
                         clipboardManager.setText(AnnotatedString(codeWithoutSpaces))
                         coroutineScope.launch {
-                            delay(8000)
+                            delay(HIGHLIGHT_DELAY_MS)
                             isHighlighted = false
                         }
                     },
@@ -503,11 +614,11 @@ fun AuthenticatorCard(
                         singleLine = true,
                         modifier = Modifier
                             .weight(1f)
-                            .padding(end = 8.dp) // Add right padding for separation
+                            .padding(end = 8.dp) // add right padding for separation
                     )
                     Box(
                         modifier = Modifier
-                            .padding(bottom = 8.dp)
+                            .padding(end = 8.dp)
                             .align(Alignment.Top)
                     ) {
                         TextButton(
@@ -572,7 +683,7 @@ fun AuthenticatorCard(
 }
 
 /**
- * Dialog for adding a new authenticator entry with name and seed fields.
+ * dialog for adding a new authenticator entry with name and seed fields.
  */
 @Composable
 fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
@@ -658,7 +769,7 @@ private fun formatCode(code: String): String {
     }
 }
 
-// validate Base32 seed
+// validate base32 seed
 private fun isValidBase32(seed: String): Boolean {
     val alphabet = TotpGenerator.ALPHABET
     val cleanedSeed = seed.uppercase().filter { it != '=' }

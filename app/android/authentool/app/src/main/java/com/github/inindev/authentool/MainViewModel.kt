@@ -3,19 +3,18 @@ package com.github.inindev.authentool
 import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.ViewModelProvider
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
@@ -23,23 +22,22 @@ import kotlinx.serialization.json.Json
 
 data class AuthCardData(val name: String, val seed: String) {
     private val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seed))
-    var totpCode by mutableStateOf(generateTotp())
-
-    fun updateTotp() {
-        totpCode = generator.generateCode()
-    }
-
-    private fun generateTotp(): String {
-        return generator.generateCode()
-    }
+    val totpCode: String get() = generator.generateCode()
 }
 
-@SuppressLint("StaticFieldLeak") // safe with application context
+data class MainUiState(
+    val codes: List<AuthCardData> = emptyList(),
+    val editingIndex: Int? = null,
+    val errorMessage: String? = null,
+    val countdownProgress: Float = 1f,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM
+)
+
+@SuppressLint("StaticFieldLeak") // Safe with application context
 class MainViewModel(private val context: Context) : ViewModel() {
-    val countdownProgress: MutableState<Float> = mutableFloatStateOf(1f)
-    private val authentoolCodes: MutableList<AuthCardData> = mutableListOf()
-    val codesState: MutableState<List<AuthCardData>> = mutableStateOf(authentoolCodes)
-    val errorMessage: MutableState<String?> = mutableStateOf(null)
+    private val _uiState = MutableStateFlow(MainUiState())
+    val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+
     private var countdownJob: Job? = null
 
     private val prefs by lazy {
@@ -55,24 +53,147 @@ class MainViewModel(private val context: Context) : ViewModel() {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
-            Log.e("MainViewModel", "Failed to initialize EncryptedSharedPreferences: ${e.message}")
-            errorMessage.value = "Storage initialization failed. Changes will not persist."
+            Log.e("MainViewModel", "failed to initialize encryptedsharedpreferences: ${e.message}")
+            _uiState.update { it.copy(errorMessage = "Storage initialization failed.") }
             null
         }
     }
 
-    val themeMode: MutableState<ThemeMode> = mutableStateOf(ThemeMode.SYSTEM) // Now a MutableState
-
     init {
-        loadThemeMode() // Load initial theme mode
+        loadThemeMode()
         loadCodes()
         startCountdown()
+    }
+
+    fun addAuthCode(name: String, seed: String) {
+        viewModelScope.launch {
+            try {
+                val newCard = AuthCardData(name, seed)
+                _uiState.update { state ->
+                    val newCodes = state.codes + newCard
+                    state.copy(codes = newCodes)
+                }
+                saveCodes()
+            } catch (e: IllegalArgumentException) {
+                _uiState.update { it.copy(errorMessage = "Invalid seed: ${e.message}") }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = "Failed to add entry: ${e.message}") }
+            }
+        }
+    }
+
+    fun deleteAuthCode(index: Int) {
+        viewModelScope.launch {
+            _uiState.update { state ->
+                val newCodes = state.codes.toMutableList().apply { removeAt(index) }
+                state.copy(codes = newCodes, editingIndex = null)
+            }
+            saveCodes()
+        }
+    }
+
+    fun updateAuthCodeName(index: Int, newName: String) {
+        if (newName.isBlank() || index !in _uiState.value.codes.indices) return
+        viewModelScope.launch {
+            _uiState.update { state ->
+                val newCodes = state.codes.toMutableList().apply {
+                    this[index] = AuthCardData(newName, this[index].seed)
+                }
+                state.copy(codes = newCodes)
+            }
+            saveCodes()
+        }
+    }
+
+    fun swapAuthCode(index: Int, direction: Direction) {
+        val state = _uiState.value
+        val toIndex = when (direction) {
+            Direction.UP -> index - 2
+            Direction.DOWN -> index + 2
+            Direction.LEFT -> index - 1
+            Direction.RIGHT -> index + 1
+        }
+        if (toIndex !in state.codes.indices || index == toIndex) return
+        when (direction) {
+            Direction.LEFT -> if (index % 2 == 0) return
+            Direction.RIGHT -> if (index % 2 != 0) return
+            else -> {}
+        }
+        viewModelScope.launch {
+            _uiState.update { state ->
+                val newCodes = state.codes.toMutableList().apply {
+                    val temp = this[index]
+                    this[index] = this[toIndex]
+                    this[toIndex] = temp
+                }
+                state.copy(codes = newCodes)
+            }
+            saveCodes()
+        }
+    }
+
+    fun setEditingIndex(index: Int?) {
+        _uiState.update { it.copy(editingIndex = index) }
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        prefs?.edit { putString("theme_preference", mode.name) }
+        _uiState.update { it.copy(themeMode = mode) }
+    }
+
+    fun clearError() {
+        _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    fun setError(message: String?) {
+        _uiState.update { it.copy(errorMessage = message) }
+    }
+
+    fun exportSeeds(): String? {
+        val preferences = prefs ?: run {
+            _uiState.update { it.copy(errorMessage = "Storage unavailable.") }
+            return null
+        }
+        return try {
+            preferences.getString("auth_codes_list", "[]") ?: "[]"
+        } catch (e: Exception) {
+            _uiState.update { it.copy(errorMessage = "Failed to export seeds.") }
+            null
+        }
     }
 
     private fun loadThemeMode() {
         prefs?.let {
             val savedMode = it.getString("theme_preference", "SYSTEM") ?: "SYSTEM"
-            themeMode.value = ThemeMode.valueOf(savedMode)
+            _uiState.update { state -> state.copy(themeMode = ThemeMode.valueOf(savedMode)) }
+        }
+    }
+
+    private fun loadCodes() {
+        val preferences = prefs ?: run {
+            Log.w("MainViewModel", "prefs unavailable - using in-memory storage")
+            return
+        }
+        try {
+            val json = preferences.getString("auth_codes_list", "[]") ?: "[]"
+            val loadedPairs = Json.decodeFromString<List<Pair<String, String>>>(json)
+            _uiState.update { it.copy(codes = loadedPairs.map { AuthCardData(it.first, it.second) }) }
+        } catch (e: Exception) {
+            _uiState.update { it.copy(errorMessage = "Failed to load saved codes.") }
+        }
+    }
+
+    private fun saveCodes() {
+        val preferences = prefs ?: run {
+            _uiState.update { it.copy(errorMessage = "Storage unavailable. Changes won’t persist.") }
+            return
+        }
+        try {
+            val pairs = _uiState.value.codes.map { it.name to it.seed }
+            val json = Json.encodeToString(pairs)
+            preferences.edit { putString("auth_codes_list", json) }
+        } catch (e: Exception) {
+            _uiState.update { it.copy(errorMessage = "Failed to save changes.") }
         }
     }
 
@@ -80,122 +201,17 @@ class MainViewModel(private val context: Context) : ViewModel() {
         countdownJob?.cancel()
         countdownJob = viewModelScope.launch {
             while (isActive) {
-                val millis = System.currentTimeMillis()
-                val seconds = (millis / 1000) % 30
-                val millisFraction = (millis % 1000) / 1000f
-                val progress = 1f - ((seconds + millisFraction) / 30f)
-                countdownProgress.value = progress
-                if (seconds == 0L && millisFraction < 0.05f) {
-                    updateCodes()
-                }
+                val now = System.currentTimeMillis()
+                val timeInPeriod = now % 30_000
+                val progress = 1f - (timeInPeriod / 30_000f)
+                _uiState.update { it.copy(countdownProgress = progress) }
                 delay(100)
             }
         }
     }
 
-    private fun loadCodes() {
-        val preferences = prefs
-        if (preferences == null) {
-            Log.w("MainViewModel", "Prefs unavailable - using in-memory storage")
-            return
-        }
-        try {
-            val json = preferences.getString("auth_codes_list", "[]") ?: "[]"
-            val loadedPairs = Json.decodeFromString<List<Pair<String, String>>>(json)
-            authentoolCodes.clear()
-            authentoolCodes.addAll(loadedPairs.map { AuthCardData(it.first, it.second) })
-            codesState.value = authentoolCodes
-            errorMessage.value = null
-        } catch (e: Exception) {
-            Log.e("MainViewModel", "Failed to load codes: ${e.stackTraceToString()}")
-            errorMessage.value = "Failed to load saved codes. Using temporary storage."
-            authentoolCodes.clear()
-            codesState.value = authentoolCodes
-        }
-    }
-
-    private fun saveCodes() {
-        val preferences = prefs
-        if (preferences == null) {
-            Log.w("MainViewModel", "Prefs unavailable - skipping save")
-            errorMessage.value = "Storage unavailable. Changes won’t persist."
-            return
-        }
-        try {
-            val pairs = authentoolCodes.map { it.name to it.seed }
-            val json = Json.encodeToString(pairs)
-            preferences.edit { putString("auth_codes_list", json) }
-            errorMessage.value = null
-        } catch (e: Exception) {
-            Log.e("MainViewModel", "Failed to save codes: ${e.stackTraceToString()}")
-            errorMessage.value = "Failed to save changes. Data may be lost."
-        }
-    }
-
-    fun addAuthCode(name: String, seed: String) {
-        try {
-            val newCard = AuthCardData(name, seed)
-            authentoolCodes.add(newCard)
-            codesState.value = authentoolCodes.toList()
-            saveCodes()
-        } catch (e: IllegalArgumentException) {
-            errorMessage.value = "Invalid seed: ${e.message}"
-        } catch (e: Exception) {
-            Log.e("MainViewModel", "Unexpected error adding code: ${e.message}")
-            errorMessage.value = "Failed to add entry: ${e.message}"
-        }
-    }
-
-    fun deleteAuthCode(cardToDelete: AuthCardData) {
-        authentoolCodes.remove(cardToDelete)
-        codesState.value = authentoolCodes.toList()
-        saveCodes()
-    }
-
-    fun swapAuthCode(index: Int, direction: Direction) {
-        val toIndex = when (direction) {
-            Direction.UP -> index - 2
-            Direction.DOWN -> index + 2
-            Direction.LEFT -> index - 1
-            Direction.RIGHT -> index + 1
-        }
-        if (toIndex < 0 || toIndex >= authentoolCodes.size || index == toIndex) return
-        when (direction) {
-            Direction.LEFT -> if (index % 2 == 0) return
-            Direction.RIGHT -> if (index % 2 != 0) return
-            else -> {}
-        }
-        val temp = authentoolCodes[index]
-        authentoolCodes[index] = authentoolCodes[toIndex]
-        authentoolCodes[toIndex] = temp
-        codesState.value = authentoolCodes.toList()
-        saveCodes()
-    }
-
-    fun updateAuthCodeName(index: Int, newName: String) {
-        if (index < 0 || index >= authentoolCodes.size || newName.isBlank()) return
-        val oldCard = authentoolCodes[index]
-        authentoolCodes[index] = AuthCardData(newName, oldCard.seed)
-        codesState.value = authentoolCodes.toList()
-        saveCodes()
-    }
-
-    fun setThemeMode(mode: ThemeMode) {
-        prefs?.edit { putString("theme_preference", mode.name) }
-        themeMode.value = mode // Update the state to trigger recomposition
-    }
-
-    private fun updateCodes() {
-        for (card in authentoolCodes) {
-            card.updateTotp()
-        }
-        codesState.value = authentoolCodes.toList()
-    }
-
     override fun onCleared() {
         countdownJob?.cancel()
-        authentoolCodes.clear()
-        codesState.value = authentoolCodes
         super.onCleared()
     }
 }
