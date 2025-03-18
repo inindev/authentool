@@ -61,14 +61,19 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
-    val themeMode: ThemeMode
-        get() = prefs?.let {
-            ThemeMode.valueOf(it.getString("theme_preference", "SYSTEM") ?: "SYSTEM")
-        } ?: ThemeMode.SYSTEM // fallback to system if prefs is null
+    val themeMode: MutableState<ThemeMode> = mutableStateOf(ThemeMode.SYSTEM) // Now a MutableState
 
     init {
+        loadThemeMode() // Load initial theme mode
         loadCodes()
         startCountdown()
+    }
+
+    private fun loadThemeMode() {
+        prefs?.let {
+            val savedMode = it.getString("theme_preference", "SYSTEM") ?: "SYSTEM"
+            themeMode.value = ThemeMode.valueOf(savedMode)
+        }
     }
 
     private fun startCountdown() {
@@ -89,7 +94,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     }
 
     private fun loadCodes() {
-        val preferences = prefs // local variable to avoid smart cast issue
+        val preferences = prefs
         if (preferences == null) {
             Log.w("MainViewModel", "Prefs unavailable - using in-memory storage")
             return
@@ -110,7 +115,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     }
 
     private fun saveCodes() {
-        val preferences = prefs // local variable to avoid smart cast issue
+        val preferences = prefs
         if (preferences == null) {
             Log.w("MainViewModel", "Prefs unavailable - skipping save")
             errorMessage.value = "Storage unavailable. Changes won’t persist."
@@ -173,6 +178,11 @@ class MainViewModel(private val context: Context) : ViewModel() {
         authentoolCodes[index] = AuthCardData(newName, oldCard.seed)
         codesState.value = authentoolCodes.toList()
         saveCodes()
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        prefs?.edit { putString("theme_preference", mode.name) }
+        themeMode.value = mode // Update the state to trigger recomposition
     }
 
     private fun updateCodes() {

@@ -21,7 +21,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -59,6 +60,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -66,7 +69,6 @@ import com.github.inindev.authentool.ui.theme.AppColorTheme
 import com.github.inindev.authentool.ui.theme.customColorScheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
 
 // countdown bar placement
 private enum class CountdownLocation {
@@ -91,7 +93,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainActivityContent(viewModel: MainViewModel) {
     val systemDarkTheme = isSystemInDarkTheme()
-    val darkTheme = when (viewModel.themeMode) {
+    val themeMode by viewModel.themeMode // Now a State object
+    val darkTheme = when (themeMode) {
         ThemeMode.SYSTEM -> systemDarkTheme
         ThemeMode.DAY -> false
         ThemeMode.NIGHT -> true
@@ -102,22 +105,20 @@ fun MainActivityContent(viewModel: MainViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    // show snackbar when errorMessage changes
     LaunchedEffect(errorMessage) {
         errorMessage?.let { message ->
             coroutineScope.launch {
                 snackbarHostState.showSnackbar(
                     message = message,
-                    duration = SnackbarDuration.Long  // 10s for visibility
+                    duration = SnackbarDuration.Long
                 )
-                viewModel.errorMessage.value = null  // clear error after display
+                viewModel.errorMessage.value = null
             }
         }
     }
 
     AppColorTheme(darkTheme = darkTheme, dynamicColor = false) {
-        // add density override
-        val targetDensity = 320f / 160f // target scaling factor for 320 dpi (Galaxy S23 Plus)
+        val targetDensity = 320f / 160f
         val currentDensity = LocalDensity.current.density
         val adjustedDensity = if (currentDensity > targetDensity) targetDensity else currentDensity
 
@@ -202,8 +203,18 @@ fun AuthGrid(
 
     var editingIndex by remember { mutableStateOf<Int?>(null) }
     var editedName by remember { mutableStateOf<String?>(null) }
+    var showSystemMenu by remember { mutableStateOf(false) }
+    var menuOffset by remember { mutableStateOf(DpOffset(0.dp, 0.dp)) }
+    var showThemeSubmenu by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = editingIndex == null) { /* ignore */ }
+    BackHandler(enabled = editingIndex == null && !showSystemMenu) { /* ignore */ }
+    BackHandler(enabled = showSystemMenu) {
+        if (showThemeSubmenu) {
+            showThemeSubmenu = false
+        } else {
+            showSystemMenu = false
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
@@ -219,65 +230,89 @@ fun AuthGrid(
         Surface(
             modifier = Modifier
                 .weight(1f)
-                .pointerInput(editingIndex) {
-                    if (editingIndex != null) {
-                        detectTapGestures {
-                            editedName?.let { name ->
-                                if (name != codes[editingIndex!!].name) {
-                                    viewModel.updateAuthCodeName(editingIndex!!, name)
-                                }
-                            }
-                            editingIndex = null
-                        }
-                    }
-                },
+                .fillMaxWidth(),
             color = colorScheme.AppBackground
         ) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.padding(all = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                itemsIndexed(codes) { index, card ->
-                    AuthenticatorCard(
-                        card = card,
-                        textColor = colorScheme.CardName,
-                        cardBackground = colorScheme.CardBackground,
-                        highlightColor = colorScheme.CardHiBackground,
-                        isEditing = index == editingIndex,
-                        onLongPress = { editingIndex = index },
-                        onDeleteClick = { onCodeToDeleteChange(card) },
-                        moveActions = MoveActions(
-                            onMoveUp = {
-                                viewModel.swapAuthCode(index, Direction.UP)
-                                editedName?.let { name ->
-                                    if (name != card.name) {
-                                        viewModel.updateAuthCodeName(index, name)
+            Box {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(all = 16.dp)
+                        .pointerInput(editingIndex, showSystemMenu) {
+                            detectTapGestures(
+                                onTap = {
+                                    if (editingIndex != null) {
+                                        editedName?.let { name ->
+                                            if (name != codes[editingIndex!!].name) {
+                                                viewModel.updateAuthCodeName(editingIndex!!, name)
+                                            }
+                                        }
+                                        editingIndex = null
+                                    }
+                                },
+                                onLongPress = { offset ->
+                                    if (editingIndex == null && !showSystemMenu) {
+                                        menuOffset = DpOffset(offset.x.toDp(), offset.y.toDp())
+                                        showSystemMenu = true
                                     }
                                 }
-                                editingIndex = null
-                            },
-                            onMoveDown = {
-                                viewModel.swapAuthCode(index, Direction.DOWN)
-                                editedName?.let { name ->
-                                    if (name != card.name) {
-                                        viewModel.updateAuthCodeName(index, name)
+                            )
+                        },
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(codes) { index, card ->
+                        AuthenticatorCard(
+                            card = card,
+                            textColor = colorScheme.CardName,
+                            cardBackground = colorScheme.CardBackground,
+                            highlightColor = colorScheme.CardHiBackground,
+                            isEditing = index == editingIndex,
+                            onLongPress = { editingIndex = index },
+                            onDeleteClick = { onCodeToDeleteChange(card) },
+                            moveActions = MoveActions(
+                                onMoveUp = {
+                                    viewModel.swapAuthCode(index, Direction.UP)
+                                    editedName?.let { name ->
+                                        if (name != card.name) {
+                                            viewModel.updateAuthCodeName(index, name)
+                                        }
                                     }
-                                }
-                                editingIndex = null
-                            },
-                            onMoveLeft = {
-                                viewModel.swapAuthCode(index, Direction.LEFT)
-                                editedName?.let { name ->
-                                    if (name != card.name) {
-                                        viewModel.updateAuthCodeName(index, name)
+                                    editingIndex = null
+                                },
+                                onMoveDown = {
+                                    viewModel.swapAuthCode(index, Direction.DOWN)
+                                    editedName?.let { name ->
+                                        if (name != card.name) {
+                                            viewModel.updateAuthCodeName(index, name)
+                                        }
                                     }
+                                    editingIndex = null
+                                },
+                                onMoveLeft = {
+                                    viewModel.swapAuthCode(index, Direction.LEFT)
+                                    editedName?.let { name ->
+                                        if (name != card.name) {
+                                            viewModel.updateAuthCodeName(index, name)
+                                        }
+                                    }
+                                    editingIndex = null
+                                },
+                                onMoveRight = {
+                                    viewModel.swapAuthCode(index, Direction.RIGHT)
+                                    editedName?.let { name ->
+                                        if (name != card.name) {
+                                            viewModel.updateAuthCodeName(index, name)
+                                        }
+                                    }
+                                    editingIndex = null
                                 }
-                                editingIndex = null
-                            },
-                            onMoveRight = {
-                                viewModel.swapAuthCode(index, Direction.RIGHT)
+                            ),
+                            onNameChanged = { newName -> editedName = newName },
+                            index = index,
+                            totalItems = codes.size,
+                            onEditingDismissed = {
                                 editedName?.let { name ->
                                     if (name != card.name) {
                                         viewModel.updateAuthCodeName(index, name)
@@ -285,19 +320,94 @@ fun AuthGrid(
                                 }
                                 editingIndex = null
                             }
-                        ),
-                        onNameChanged = { newName -> editedName = newName },
-                        index = index,
-                        totalItems = codes.size,
-                        onEditingDismissed = {
-                            editedName?.let { name ->
-                                if (name != card.name) {
-                                    viewModel.updateAuthCodeName(index, name)
+                        )
+                    }
+                }
+                if (showSystemMenu) {
+                    Card(
+                        modifier = Modifier
+                            .offset { IntOffset(menuOffset.x.roundToPx(), menuOffset.y.roundToPx()) } // Lambda overload
+                            .wrapContentSize(),
+                        shape = RoundedCornerShape(4.dp),
+                        colors = CardDefaults.cardColors(containerColor = colorScheme.AppBackground),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .width(IntrinsicSize.Max)
+                                .padding(vertical = 4.dp)
+                        ) {
+                            if (!showThemeSubmenu) {
+                                TextButton(
+                                    onClick = { showThemeSubmenu = true },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(36.dp)
+                                ) {
+                                    Text(
+                                        text = "Theme",
+                                        color = colorScheme.AppText,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { /* TODO: Add action */ },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(36.dp)
+                                ) {
+                                    Text(
+                                        text = "Future Item",
+                                        color = colorScheme.AppText,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            } else {
+                                ThemeMode.entries.forEach { mode ->
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.setThemeMode(mode)
+                                            showSystemMenu = false
+                                            showThemeSubmenu = false
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(36.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (viewModel.themeMode.value == mode) { // Use .value since themeMode is now State
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = colorScheme.AppText,
+                                                    modifier = Modifier
+                                                        .size(20.dp)
+                                                        .padding(end = 8.dp)
+                                                )
+                                            } else {
+                                                Spacer(modifier = Modifier.width(28.dp))
+                                            }
+                                            Text(
+                                                text = when (mode) {
+                                                    ThemeMode.SYSTEM -> "System"
+                                                    ThemeMode.DAY -> "Light"
+                                                    ThemeMode.NIGHT -> "Dark"
+                                                },
+                                                color = colorScheme.AppText,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
+                                    }
                                 }
                             }
-                            editingIndex = null
                         }
-                    )
+                    }
                 }
             }
         }
@@ -375,7 +485,7 @@ fun AuthenticatorCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
-            modifier = Modifier.padding(start = 20.dp, top = 16.dp, end = 16.dp, bottom = 16.dp),
+            modifier = Modifier.padding(start = 20.dp, top = 16.dp, end = if (isEditing) 0.dp else 16.dp, bottom = 16.dp),
             horizontalAlignment = Alignment.Start
         ) {
             Row(
@@ -391,15 +501,35 @@ fun AuthenticatorCard(
                         },
                         label = { Text("name", color = colors.AppText, style = MaterialTheme.typography.bodyLarge) },
                         singleLine = true,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp) // Add right padding for separation
                     )
                     Box(
                         modifier = Modifier
-                            .padding(start = 8.dp, bottom = 8.dp)
+                            .padding(bottom = 8.dp)
                             .align(Alignment.Top)
                     ) {
-                        IconButton(onClick = onDeleteClick) {
-                            Icon(Icons.Default.Cancel, contentDescription = "delete", tint = MaterialTheme.colorScheme.error)
+                        TextButton(
+                            onClick = onDeleteClick,
+                            modifier = Modifier.padding(0.dp)
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Delete,
+                                    contentDescription = "delete",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "delete",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
                         }
                     }
                 } else {
