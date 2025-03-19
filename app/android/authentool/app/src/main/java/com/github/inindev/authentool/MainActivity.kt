@@ -85,9 +85,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
-private const val HIGHLIGHT_DELAY_MS = 8000L
-private const val ERROR_DISPLAY_DURATION_MS = 2000L
-private const val ANIMATION_DURATION_MS = 100
+private const val highlight_delay_ms = 8000L
+private const val error_display_duration_ms = 2000L
+private const val animation_duration_ms = 100
 
 // countdown bar placement
 private enum class CountdownLocation {
@@ -96,7 +96,7 @@ private enum class CountdownLocation {
     BOTTOM,
     BOTH
 }
-private val COUNTDOWN_LOCATION = CountdownLocation.BOTH
+private val countdown_location = CountdownLocation.BOTH
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -216,13 +216,14 @@ fun AuthGrid(
     val countdownProgress = uiState.countdownProgress
     val animatedProgress by animateFloatAsState(
         targetValue = countdownProgress,
-        animationSpec = tween(durationMillis = ANIMATION_DURATION_MS, easing = LinearEasing)
+        animationSpec = tween(durationMillis = animation_duration_ms, easing = LinearEasing)
     )
     val codes = uiState.codes
     val colorScheme = MaterialTheme.customColorScheme
     val context = LocalContext.current
     val storageManager = context.getSystemService<StorageManager>()
     val coroutineScope = rememberCoroutineScope()
+    val density = LocalDensity.current
 
     // log recomposition only when codes change
     LaunchedEffect(codes) {
@@ -243,6 +244,13 @@ fun AuthGrid(
             Log.d("MainActivity", "authgrid: resetting editingindex from $currentEditingIndex to null due to size=${codes.size}")
             editingIndex = null // safe assignment
         }
+    }
+
+    // debug editingIndex changes
+    LaunchedEffect(editingIndex) {
+        editingIndex?.let { idx ->
+            Log.d("MainActivity", "authgrid: editingIndex set to $idx, name=${codes.getOrNull(idx)?.name}")
+        } ?: Log.d("MainActivity", "authgrid: editingIndex cleared")
     }
 
     // state for storage info, initialized empty
@@ -273,10 +281,10 @@ fun AuthGrid(
             viewModel.exportSeeds()?.let { seedsJson ->
                 context.contentResolver.openOutputStream(it)?.use { outputStream ->
                     outputStream.write(seedsJson.toByteArray())
-                }
+                } ?: Log.e("MainActivity", "authgrid: failed to open output stream for uri $it")
                 coroutineScope.launch {
                     viewModel.setError("Backup saved to USB.")
-                    delay(ERROR_DISPLAY_DURATION_MS)
+                    delay(error_display_duration_ms)
                     viewModel.clearError()
                 }
             }
@@ -284,7 +292,7 @@ fun AuthGrid(
         } ?: run {
             coroutineScope.launch {
                 viewModel.setError("Failed to save backup.")
-                delay(ERROR_DISPLAY_DURATION_MS)
+                delay(error_display_duration_ms)
                 viewModel.clearError()
             }
         }
@@ -330,7 +338,7 @@ fun AuthGrid(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (COUNTDOWN_LOCATION == CountdownLocation.TOP || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
+        if (countdown_location == CountdownLocation.TOP || countdown_location == CountdownLocation.BOTH) {
             LinearProgressIndicator(
                 progress = { animatedProgress },
                 modifier = Modifier.fillMaxWidth().height(8.dp),
@@ -348,7 +356,7 @@ fun AuthGrid(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(all = 16.dp)
-                        .pointerInput(editingIndex, showSystemMenu) {
+                        .pointerInput(Unit) {
                             detectTapGestures(
                                 onTap = {
                                     if (editingIndex != null) {
@@ -361,8 +369,11 @@ fun AuthGrid(
                                     }
                                 },
                                 onLongPress = { offset ->
-                                    if (editingIndex == null && !showSystemMenu) {
-                                        menuOffset = DpOffset(offset.x.toDp(), offset.y.toDp())
+                                    if (editingIndex == null) {
+                                        Log.d("MainActivity", "authgrid: background long press at $offset")
+                                        with(density) {
+                                            menuOffset = DpOffset(offset.x.toDp(), offset.y.toDp())
+                                        }
                                         showSystemMenu = true
                                     }
                                 }
@@ -382,7 +393,10 @@ fun AuthGrid(
                             cardBackground = colorScheme.CardBackground,
                             highlightColor = colorScheme.CardHiBackground,
                             isEditing = index == editingIndex,
-                            onLongPress = { editingIndex = index },
+                            onLongPress = {
+                                Log.d("MainActivity", "authgrid: long press on index=$index, name=${card.name}")
+                                editingIndex = index
+                            },
                             onDeleteClick = { onCodeToDeleteChange(card) },
                             moveActions = MoveActions(
                                 onMoveUp = { viewModel.swapAuthCode(index, Direction.UP); editingIndex = null },
@@ -395,7 +409,7 @@ fun AuthGrid(
                             totalItems = codes.size,
                             onEditingDismissed = {
                                 editedName?.let { name ->
-                                    if (name != card.name) {
+                                    if (name != codes[editingIndex!!].name) {
                                         viewModel.updateAuthCodeName(index, name)
                                     }
                                 }
@@ -524,7 +538,7 @@ fun AuthGrid(
                 }
             }
         }
-        if (COUNTDOWN_LOCATION == CountdownLocation.BOTTOM || COUNTDOWN_LOCATION == CountdownLocation.BOTH) {
+        if (countdown_location == CountdownLocation.BOTTOM || countdown_location == CountdownLocation.BOTH) {
             LinearProgressIndicator(
                 progress = { animatedProgress },
                 modifier = Modifier.fillMaxWidth().height(8.dp),
@@ -577,14 +591,14 @@ fun AuthenticatorCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(4.dp)
-            .pointerInput(Unit) {
+            .pointerInput(index) { // unique key per card
                 detectTapGestures(
                     onTap = {
                         isHighlighted = true
                         val codeWithoutSpaces = card.totpCode.replace("\\s".toRegex(), "")
                         clipboardManager.setText(AnnotatedString(codeWithoutSpaces))
                         coroutineScope.launch {
-                            delay(HIGHLIGHT_DELAY_MS)
+                            delay(highlight_delay_ms)
                             isHighlighted = false
                         }
                     },

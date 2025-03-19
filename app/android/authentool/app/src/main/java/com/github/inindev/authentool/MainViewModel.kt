@@ -33,7 +33,7 @@ data class MainUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM
 )
 
-@SuppressLint("StaticFieldLeak") // Safe with application context
+@SuppressLint("StaticFieldLeak") // safe with application context
 class MainViewModel(private val context: Context) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -107,18 +107,34 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     fun swapAuthCode(index: Int, direction: Direction) {
         val state = _uiState.value
+        if (index !in state.codes.indices) return
+
+        val columns = 2 // matches GridCells.Fixed(2)
+        val row = index / columns
+        val col = index % columns
+        val totalRows = (state.codes.size + columns - 1) / columns
+
         val toIndex = when (direction) {
-            Direction.UP -> index - 2
-            Direction.DOWN -> index + 2
-            Direction.LEFT -> index - 1
-            Direction.RIGHT -> index + 1
+            Direction.UP -> {
+                if (row == 0) return // cannot move up from first row
+                index - columns
+            }
+            Direction.DOWN -> {
+                if (row == totalRows - 1) return // cannot move down from last row
+                index + columns
+            }
+            Direction.LEFT -> {
+                if (col == 0) return // cannot move left from left column
+                index - 1
+            }
+            Direction.RIGHT -> {
+                if (col == columns - 1) return // cannot move right from right column
+                index + 1
+            }
         }
-        if (toIndex !in state.codes.indices || index == toIndex) return
-        when (direction) {
-            Direction.LEFT -> if (index % 2 == 0) return
-            Direction.RIGHT -> if (index % 2 != 0) return
-            else -> {}
-        }
+
+        if (toIndex !in state.codes.indices) return
+
         viewModelScope.launch {
             _uiState.update { state ->
                 val newCodes = state.codes.toMutableList().apply {
