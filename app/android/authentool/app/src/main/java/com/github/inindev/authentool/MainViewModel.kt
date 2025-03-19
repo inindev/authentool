@@ -29,7 +29,6 @@ data class MainUiState(
     val totpCodes: List<String> = emptyList(),
     val editingIndex: Int? = null,
     val errorMessage: String? = null,
-    val countdownProgress: Float = 1f,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val highlightedIndex: Int? = null
 )
@@ -38,6 +37,9 @@ data class MainUiState(
 class MainViewModel(private val context: Context) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+
+    private val _countdownProgress = MutableStateFlow(1f)
+    val countdownProgress: StateFlow<Float> = _countdownProgress.asStateFlow()
 
     private var countdownJob: Job? = null
 
@@ -252,12 +254,14 @@ class MainViewModel(private val context: Context) : ViewModel() {
                 val timeInPeriod = now % (TotpGenerator.TIME_STEP * 1000)
                 val denominator = TotpGenerator.TIME_STEP * 1000f
                 val progress = if (denominator > 0f) 1f - (timeInPeriod / denominator) else 1f
+
+                _countdownProgress.value = progress
+
                 if (epoch != lastEpoch) {
                     val currentCodes = _uiState.value.codes.map { it.generator.generateCode() }
                     _uiState.update { it.copy(totpCodes = currentCodes) }
                     lastEpoch = epoch
                 }
-                _uiState.update { it.copy(countdownProgress = progress) }
                 delay(100)
             }
         }

@@ -213,12 +213,14 @@ fun AuthGrid(
     onCodeToDeleteChange: (AuthCardData?) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val countdownProgress = uiState.countdownProgress
+    val countdownProgress by viewModel.countdownProgress.collectAsState()
     val animatedProgress by animateFloatAsState(
         targetValue = countdownProgress,
-        animationSpec = tween(durationMillis = animation_duration_ms, easing = LinearEasing)
+        animationSpec = tween(durationMillis = animation_duration_ms, easing = LinearEasing),
+        label = "countdownProgress"
     )
     val codes = uiState.codes
+    val totpCodes = uiState.totpCodes
     val colorScheme = MaterialTheme.customColorScheme
     val context = LocalContext.current
     val storageManager = context.getSystemService<StorageManager>()
@@ -369,10 +371,10 @@ fun AuthGrid(
                         items = uiState.codes,
                         key = { _, card -> "${card.name}-${card.seed}" } // stable key
                     ) { index, card ->
-                        Log.d("MainActivity", "authgrid: rendering card index=$index, name=${card.name}")
+                        val totpCode = totpCodes.getOrElse(index) { "000000" }
                         AuthenticatorCard(
                             card = card,
-                            totpCode = uiState.totpCodes.getOrElse(index) { "000000" },
+                            totpCode = totpCode,
                             textColor = colorScheme.CardName,
                             cardBackground = colorScheme.CardBackground,
                             highlightColor = colorScheme.CardHiBackground,
@@ -569,8 +571,8 @@ fun AuthenticatorCard(
     var editedName by remember(isEditing) { mutableStateOf(card.name) }
     val clipboardManager = LocalClipboardManager.current
 
-    // log card recomposition
-    LaunchedEffect(Unit) {
+    // log recomposition only when key props change
+    LaunchedEffect(card, totpCode, isEditing, isHighlighted) {
         Log.d("MainActivity", "authenticatorcard: recomposing index=$index, name=${card.name}")
     }
 
