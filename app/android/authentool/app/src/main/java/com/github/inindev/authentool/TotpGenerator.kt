@@ -11,10 +11,11 @@ import kotlin.math.pow
  */
 class TotpGenerator(
     private val seedBytes: ByteArray,
-    private val timeStep: Long = 30L,
+    private val timeStep: Long = TIME_STEP,
     private val digits: Int = 6
 ) {
     companion object {
+        const val TIME_STEP = 30L
         // Base32 alphabet per RFC 4648
         const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 

@@ -85,7 +85,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
-private const val highlight_delay_ms = 8000L
+const val highlight_delay_ms = 8000L
 private const val error_display_duration_ms = 2000L
 private const val animation_duration_ms = 100
 
@@ -230,28 +230,11 @@ fun AuthGrid(
         Log.d("MainActivity", "authgrid: recomposing with ${codes.size} codes: ${codes.map { it.name }}")
     }
 
-    var editingIndex by remember { mutableStateOf<Int?>(null) }
     var editedName by remember { mutableStateOf<String?>(null) }
     var showSystemMenu by remember { mutableStateOf(false) }
     var menuOffset by remember { mutableStateOf(DpOffset(0.dp, 0.dp)) }
     var showThemeSubmenu by remember { mutableStateOf(false) }
     var showBackupDialog by remember { mutableStateOf(false) }
-
-    // reset editingindex if it exceeds list size after deletion
-    LaunchedEffect(codes) {
-        val currentEditingIndex = editingIndex // snapshot the value
-        if (currentEditingIndex != null && currentEditingIndex >= codes.size) {
-            Log.d("MainActivity", "authgrid: resetting editingindex from $currentEditingIndex to null due to size=${codes.size}")
-            editingIndex = null // safe assignment
-        }
-    }
-
-    // debug editingIndex changes
-    LaunchedEffect(editingIndex) {
-        editingIndex?.let { idx ->
-            Log.d("MainActivity", "authgrid: editingIndex set to $idx, name=${codes.getOrNull(idx)?.name}")
-        } ?: Log.d("MainActivity", "authgrid: editingIndex cleared")
-    }
 
     // state for storage info, initialized empty
     var externalDirs by remember { mutableStateOf(emptyList<File>()) }
@@ -326,7 +309,7 @@ fun AuthGrid(
         }
     }
 
-    BackHandler(enabled = editingIndex == null && !showSystemMenu) { /* ignore */ }
+    BackHandler(enabled = uiState.editingIndex == null && !showSystemMenu) { /* ignore */ }
     BackHandler(enabled = showSystemMenu || showBackupDialog) {
         if (showThemeSubmenu) {
             showThemeSubmenu = false
@@ -359,17 +342,17 @@ fun AuthGrid(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onTap = {
-                                    if (editingIndex != null) {
+                                    if (uiState.editingIndex != null) {
                                         editedName?.let { name ->
-                                            if (name != codes[editingIndex!!].name) {
-                                                viewModel.updateAuthCodeName(editingIndex!!, name)
+                                            if (name != codes[uiState.editingIndex!!].name) {
+                                                viewModel.updateAuthCodeName(uiState.editingIndex!!, name)
                                             }
                                         }
-                                        editingIndex = null
+                                        viewModel.setEditingIndex(null)
                                     }
                                 },
                                 onLongPress = { offset ->
-                                    if (editingIndex == null) {
+                                    if (uiState.editingIndex == null) {
                                         Log.d("MainActivity", "authgrid: background long press at $offset")
                                         with(density) {
                                             menuOffset = DpOffset(offset.x.toDp(), offset.y.toDp())
@@ -383,38 +366,39 @@ fun AuthGrid(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     itemsIndexed(
-                        items = codes,
+                        items = uiState.codes,
                         key = { _, card -> "${card.name}-${card.seed}" } // stable key
                     ) { index, card ->
                         Log.d("MainActivity", "authgrid: rendering card index=$index, name=${card.name}")
                         AuthenticatorCard(
                             card = card,
+                            totpCode = uiState.totpCodes.getOrElse(index) { "000000" },
                             textColor = colorScheme.CardName,
                             cardBackground = colorScheme.CardBackground,
                             highlightColor = colorScheme.CardHiBackground,
-                            isEditing = index == editingIndex,
-                            onLongPress = {
-                                Log.d("MainActivity", "authgrid: long press on index=$index, name=${card.name}")
-                                editingIndex = index
-                            },
+                            isEditing = index == uiState.editingIndex,
+                            onLongPress = { viewModel.setEditingIndex(index) },
                             onDeleteClick = { onCodeToDeleteChange(card) },
                             moveActions = MoveActions(
-                                onMoveUp = { viewModel.swapAuthCode(index, Direction.UP); editingIndex = null },
-                                onMoveDown = { viewModel.swapAuthCode(index, Direction.DOWN); editingIndex = null },
-                                onMoveLeft = { viewModel.swapAuthCode(index, Direction.LEFT); editingIndex = null },
-                                onMoveRight = { viewModel.swapAuthCode(index, Direction.RIGHT); editingIndex = null }
+                                onMoveUp = { viewModel.swapAuthCode(index, Direction.UP); viewModel.setEditingIndex(null) },
+                                onMoveDown = { viewModel.swapAuthCode(index, Direction.DOWN); viewModel.setEditingIndex(null) },
+                                onMoveLeft = { viewModel.swapAuthCode(index, Direction.LEFT); viewModel.setEditingIndex(null) },
+                                onMoveRight = { viewModel.swapAuthCode(index, Direction.RIGHT); viewModel.setEditingIndex(null) }
                             ),
                             onNameChanged = { newName -> editedName = newName },
                             index = index,
                             totalItems = codes.size,
                             onEditingDismissed = {
                                 editedName?.let { name ->
-                                    if (name != codes[editingIndex!!].name) {
+                                    if (name != codes[uiState.editingIndex!!].name) {
                                         viewModel.updateAuthCodeName(index, name)
                                     }
                                 }
-                                editingIndex = null
-                            }
+                                viewModel.setEditingIndex(null)
+                            },
+                            isHighlighted = uiState.highlightedIndex == index,
+                            onHighlight = { viewModel.setHighlightedIndex(index) },
+                            isEditingActive = uiState.editingIndex != null
                         )
                     }
                 }
@@ -565,6 +549,7 @@ data class MoveActions(
 @Composable
 fun AuthenticatorCard(
     card: AuthCardData,
+    totpCode: String,
     textColor: Color,
     cardBackground: Color,
     highlightColor: Color,
@@ -575,13 +560,19 @@ fun AuthenticatorCard(
     onNameChanged: (String) -> Unit,
     index: Int,
     totalItems: Int,
-    onEditingDismissed: () -> Unit
+    onEditingDismissed: () -> Unit,
+    isHighlighted: Boolean,
+    onHighlight: () -> Unit,
+    isEditingActive: Boolean
 ) {
     val colors = MaterialTheme.customColorScheme
     var editedName by remember(isEditing) { mutableStateOf(card.name) }
-    var isHighlighted by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
+
+    // log card recomposition
+    LaunchedEffect(Unit) {
+        Log.d("MainActivity", "authenticatorcard: recomposing index=$index, name=${card.name}")
+    }
 
     BackHandler(enabled = isEditing) {
         onEditingDismissed()
@@ -589,22 +580,26 @@ fun AuthenticatorCard(
 
     Card(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(4.dp)
-            .pointerInput(index) { // unique key per card
+            .pointerInput(card) { // use card object as key
                 detectTapGestures(
                     onTap = {
-                        isHighlighted = true
-                        val codeWithoutSpaces = card.totpCode.replace("\\s".toRegex(), "")
-                        clipboardManager.setText(AnnotatedString(codeWithoutSpaces))
-                        coroutineScope.launch {
-                            delay(highlight_delay_ms)
-                            isHighlighted = false
+                        if (!isEditingActive) {
+                            Log.d("MainActivity", "card tapped: index=$index, name=${card.name}")
+                            onHighlight()
+                            val codeWithoutSpaces = totpCode.replace("\\s".toRegex(), "")
+                            clipboardManager.setText(AnnotatedString(codeWithoutSpaces))
                         }
                     },
-                    onLongPress = { onLongPress() }
+                    onLongPress = {
+                        if (!isEditingActive) {
+                            Log.d("MainActivity", "card long-pressed: index=$index, name=${card.name}")
+                            onLongPress()
+                        }
+                    }
                 )
-            },
+            }
+            .fillMaxWidth()
+            .padding(4.dp),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = if (isHighlighted) highlightColor else cardBackground),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -667,7 +662,7 @@ fun AuthenticatorCard(
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = formatCode(card.totpCode),
+                text = formatCode(totpCode),
                 color = if (isHighlighted) colors.CardHiTotp else colors.CardTotp,
                 style = MaterialTheme.typography.displayLarge,
                 textAlign = TextAlign.Start

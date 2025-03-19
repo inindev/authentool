@@ -21,16 +21,17 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 data class AuthCardData(val name: String, val seed: String) {
-    private val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seed))
-    val totpCode: String get() = generator.generateCode()
+    internal val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seed))
 }
 
 data class MainUiState(
     val codes: List<AuthCardData> = emptyList(),
+    val totpCodes: List<String> = emptyList(),
     val editingIndex: Int? = null,
     val errorMessage: String? = null,
     val countdownProgress: Float = 1f,
-    val themeMode: ThemeMode = ThemeMode.SYSTEM
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val highlightedIndex: Int? = null
 )
 
 @SuppressLint("StaticFieldLeak") // safe with application context
@@ -149,12 +150,39 @@ class MainViewModel(private val context: Context) : ViewModel() {
     }
 
     fun setEditingIndex(index: Int?) {
-        _uiState.update { it.copy(editingIndex = index) }
+        viewModelScope.launch {
+            _uiState.update { state ->
+                if (index != null && state.highlightedIndex != null) {
+                    Log.d("MainViewModel", "clearing highlight due to editing start: $index")
+                    state.copy(editingIndex = index, highlightedIndex = null)
+                } else {
+                    state.copy(editingIndex = index)
+                }
+            }
+        }
     }
 
     fun setThemeMode(mode: ThemeMode) {
         prefs?.edit { putString("theme_preference", mode.name) }
         _uiState.update { it.copy(themeMode = mode) }
+    }
+
+    fun setHighlightedIndex(index: Int?) {
+        viewModelScope.launch {
+            _uiState.update { state ->
+                if (index != null && state.editingIndex != null) {
+                    Log.d("MainViewModel", "highlight rejected: editing active at ${state.editingIndex}")
+                    state
+                } else {
+                    Log.d("MainViewModel", "setting highlight to $index")
+                    state.copy(highlightedIndex = index)
+                }
+            }
+            if (index != null && _uiState.value.editingIndex == null) {
+                delay(highlight_delay_ms)
+                _uiState.update { it.copy(highlightedIndex = null) }
+            }
+        }
     }
 
     fun clearError() {
@@ -216,10 +244,19 @@ class MainViewModel(private val context: Context) : ViewModel() {
     private fun startCountdown() {
         countdownJob?.cancel()
         countdownJob = viewModelScope.launch {
+            var lastEpoch = -1L
             while (isActive) {
                 val now = System.currentTimeMillis()
-                val timeInPeriod = now % 30_000
-                val progress = 1f - (timeInPeriod / 30_000f)
+                val timeInSeconds = now / 1000
+                val epoch = timeInSeconds / TotpGenerator.TIME_STEP
+                val timeInPeriod = now % (TotpGenerator.TIME_STEP * 1000)
+                val denominator = TotpGenerator.TIME_STEP * 1000f
+                val progress = if (denominator > 0f) 1f - (timeInPeriod / denominator) else 1f
+                if (epoch != lastEpoch) {
+                    val currentCodes = _uiState.value.codes.map { it.generator.generateCode() }
+                    _uiState.update { it.copy(totpCodes = currentCodes) }
+                    lastEpoch = epoch
+                }
                 _uiState.update { it.copy(countdownProgress = progress) }
                 delay(100)
             }
