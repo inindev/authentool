@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -27,9 +28,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -40,10 +43,9 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import com.github.inindev.authentool.ui.theme.customColorScheme
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
-
-import com.github.inindev.authentool.ui.theme.customColorScheme
 import java.util.UUID
 
 @Stable
@@ -79,31 +81,29 @@ data class GridPosition(val index: Int, val row: Int, val column: Int) {
     }
 }
 
-// controller interface
-interface AuthCardController {
-    fun onCopyCode(code: String)
-    fun onEditStarted(cardId: String)
-    fun onEditName(cardId: String, newName: String)
-    fun onEditDismissed(cardId: String)
-    fun startEdit(state: AuthCardUiState)
-    fun onDelete(cardId: String)
-    fun onMove(cardId: String, direction: Direction)
-    fun onHighlight(cardId: String)
-}
-
-/**
- * Displays an authenticator card with name, totp code, and controls.
- */
+/** Displays an authenticator card with name, totp code, and controls. */
 @Composable
 fun AuthenticatorCard(
     state: AuthCardUiState,
-    controller: AuthCardController,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier,
     colors: AuthCardColors = AuthCardColors.default()
 ) {
     val card = state.card
     val clipboardManager = LocalClipboardManager.current
-    var editedName by rememberSaveable(state.isEditing) { mutableStateOf(card.name) }
+    var editedName by rememberSaveable(card.id) { mutableStateOf(card.name) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
+    // save name when exiting edit mode
+    LaunchedEffect(state.isEditing) {
+        if (!state.isEditing && editedName.isNotBlank() && editedName != card.name) {
+            viewModel.dispatch(AuthCommand.RenameCard(card.id, editedName))
+        }
+    }
+
+    BackHandler(enabled = state.isEditing) {
+        viewModel.dispatch(AuthCommand.StopEditing(card.id))
+    }
 
     Card(
         modifier = modifier
@@ -113,14 +113,14 @@ fun AuthenticatorCard(
                 detectTapGestures(
                     onTap = {
                         if (!state.isEditing) {
-                            controller.onHighlight(card.id)
+                            viewModel.dispatch(AuthCommand.HighlightCard(card.id))
                             clipboardManager.setText(AnnotatedString(card.generateTotpCode()))
                         }
                     },
                     onLongPress = {
                         if (!state.isEditing) {
-                            println("Long-press on card.id: ${card.id}")
-                            controller.onEditStarted(card.id)
+                            println("long-press on card.id: ${card.id}")
+                            viewModel.dispatch(AuthCommand.StartEditing(card.id))
                         }
                     }
                 )
@@ -146,7 +146,7 @@ fun AuthenticatorCard(
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
-                    TextButton(onClick = { controller.onDelete(card.id) }) {
+                    TextButton(onClick = { showDeleteDialog = true }) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Default.Delete, "delete", tint = colors.error)
                             Text("delete", color = colors.error, style = MaterialTheme.typography.labelSmall)
@@ -170,26 +170,41 @@ fun AuthenticatorCard(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     MoveButton(Icons.Default.ArrowUpward, "move up", colors.text, state.position.canMove(Direction.UP, Int.MAX_VALUE, 2)) {
-                        controller.onMove(card.id, Direction.UP)
+                        viewModel.dispatch(AuthCommand.MoveCard(card.id, Direction.UP))
                     }
                     MoveButton(Icons.AutoMirrored.Filled.ArrowBack, "move left", colors.text, state.position.canMove(Direction.LEFT, Int.MAX_VALUE, 2)) {
-                        controller.onMove(card.id, Direction.LEFT)
+                        viewModel.dispatch(AuthCommand.MoveCard(card.id, Direction.LEFT))
                     }
                     MoveButton(Icons.AutoMirrored.Filled.ArrowForward, "move right", colors.text, state.position.canMove(Direction.RIGHT, Int.MAX_VALUE, 2)) {
-                        controller.onMove(card.id, Direction.RIGHT)
+                        viewModel.dispatch(AuthCommand.MoveCard(card.id, Direction.RIGHT))
                     }
                     MoveButton(Icons.Default.ArrowDownward, "move down", colors.text, state.position.canMove(Direction.DOWN, Int.MAX_VALUE, 2)) {
-                        controller.onMove(card.id, Direction.DOWN)
+                        viewModel.dispatch(AuthCommand.MoveCard(card.id, Direction.DOWN))
                     }
                 }
             }
         }
     }
 
-    // handle edit dismissal via back press or external trigger
-    BackHandler(enabled = state.isEditing) {
-        if (editedName != card.name) controller.onEditName(card.id, editedName)
-        controller.onEditDismissed(card.id)
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Delete Authenticator Entry", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.titleLarge) },
+            text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.bodyLarge) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.dispatch(AuthCommand.DeleteCard(card.id))
+                    showDeleteDialog = false
+                }) {
+                    Text("delete", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("cancel", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        )
     }
 }
 

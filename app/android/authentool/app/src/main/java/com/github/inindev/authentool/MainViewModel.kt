@@ -2,11 +2,9 @@ package com.github.inindev.authentool
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.util.Log
 import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.ViewModelProvider
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.Job
@@ -19,19 +17,31 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.util.UUID
+import kotlinx.serialization.Serializable
 
 data class MainUiState(
     val codes: List<AuthCard> = emptyList(),
     val totpCodes: List<String> = emptyList(),
-    val editingIndex: Int? = null,
+    val editingCardId: String? = null,
+    val highlightedCardId: String? = null,
     val errorMessage: String? = null,
-    val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val highlightedIndex: Int? = null,
-    val pendingDeleteCardId: String? = null
+    val themeMode: ThemeMode = ThemeMode.SYSTEM
 )
 
-@SuppressLint("StaticFieldLeak") // safe with application context
+sealed class AuthCommand {
+    data class AddCard(val name: String, val seed: String) : AuthCommand()
+    data class RenameCard(val cardId: String, val newName: String) : AuthCommand()
+    data class DeleteCard(val cardId: String) : AuthCommand()
+    data class MoveCard(val cardId: String, val direction: Direction) : AuthCommand()
+    data class StartEditing(val cardId: String) : AuthCommand()
+    data class StopEditing(val cardId: String) : AuthCommand()
+    data class HighlightCard(val cardId: String) : AuthCommand()
+    data class ClearHighlight(val cardId: String) : AuthCommand()
+    data class SetTheme(val mode: ThemeMode) : AuthCommand()
+    data class SetError(val message: String?) : AuthCommand()
+}
+
+@SuppressLint("StaticFieldLeak")
 class MainViewModel(private val context: Context) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -54,7 +64,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
-            Log.e("MainViewModel", "failed to initialize encryptedsharedpreferences: ${e.message}")
+            android.util.Log.e("MainViewModel", "failed to initialize encryptedsharedpreferences: ${e.message}")
             _uiState.update { it.copy(errorMessage = "Storage initialization failed.") }
             null
         }
@@ -66,166 +76,134 @@ class MainViewModel(private val context: Context) : ViewModel() {
         startCountdown()
     }
 
-    fun addAuthCode(name: String, seed: String) {
+    fun dispatch(command: AuthCommand) {
         viewModelScope.launch {
+            val newState = reduce(_uiState.value, command)
+            _uiState.value = newState
+            if (shouldPersist(command)) {
+                saveCodes(newState.codes)
+            }
+        }
+    }
+
+    private fun reduce(state: MainUiState, command: AuthCommand): MainUiState = when (command) {
+        is AuthCommand.AddCard -> {
             try {
-                val newCard = AuthCard(name = name, seed = seed)
-                _uiState.update { state ->
-                    val newCodes = state.codes + newCard
-                    state.copy(codes = newCodes)
-                }
-                saveCodes()
+                val newCard = AuthCard(name = command.name, seed = command.seed)
+                state.copy(codes = state.codes + newCard)
             } catch (e: IllegalArgumentException) {
-                _uiState.update { it.copy(errorMessage = "Invalid seed: ${e.message}") }
+                state.copy(errorMessage = "Invalid seed: ${e.message}")
             } catch (e: Exception) {
-                _uiState.update { it.copy(errorMessage = "Failed to add entry: ${e.message}") }
+                state.copy(errorMessage = "Failed to add entry: ${e.message}")
             }
         }
-    }
-
-    fun deleteAuthCode(index: Int) {
-        viewModelScope.launch {
-            _uiState.update { state ->
-                val newCodes = state.codes.toMutableList().apply { removeAt(index) }
-                state.copy(codes = newCodes, editingIndex = null)
-            }
-            saveCodes()
+        is AuthCommand.RenameCard -> {
+            val index = state.codes.indexOfFirst { it.id == command.cardId }
+            if (index >= 0 && command.newName.isNotBlank()) {
+                val updatedCard = state.codes[index].copy(name = command.newName)
+                state.copy(codes = state.codes.toMutableList().apply { this[index] = updatedCard })
+            } else state
         }
-    }
-
-    fun updateAuthCodeName(index: Int, newName: String) {
-        if (newName.isBlank() || index !in _uiState.value.codes.indices) return
-        viewModelScope.launch {
-            _uiState.update { state ->
-                val newCodes = state.codes.toMutableList().apply {
-                    val oldCard = this[index]
-                    this[index] = AuthCard(oldCard.id, newName, oldCard.seed)
-                }
-                state.copy(codes = newCodes)
-            }
-            saveCodes()
+        is AuthCommand.DeleteCard -> {
+            state.copy(codes = state.codes.filter { it.id != command.cardId })
         }
+        is AuthCommand.MoveCard -> {
+            val index = state.codes.indexOfFirst { it.id == command.cardId }
+            if (index >= 0) swapCards(state, index, command.direction) else state
+        }
+        is AuthCommand.StartEditing -> state.copy(editingCardId = command.cardId, highlightedCardId = null)
+        is AuthCommand.StopEditing -> state.copy(editingCardId = null)
+        is AuthCommand.HighlightCard -> if (state.editingCardId == null) {
+            state.copy(highlightedCardId = command.cardId).also { scheduleHighlightClear(command.cardId) }
+        } else state
+        is AuthCommand.ClearHighlight -> state.copy(highlightedCardId = null)
+        is AuthCommand.SetTheme -> state.copy(themeMode = command.mode).also { saveThemeMode(command.mode) }
+        is AuthCommand.SetError -> state.copy(errorMessage = command.message)
     }
 
-    fun swapAuthCode(index: Int, direction: Direction) {
-        val state = _uiState.value
-        if (index !in state.codes.indices) return
+    private fun shouldPersist(command: AuthCommand): Boolean = when (command) {
+        is AuthCommand.AddCard, is AuthCommand.RenameCard, is AuthCommand.DeleteCard, is AuthCommand.MoveCard -> true
+        else -> false
+    }
 
-        val columns = 2 // matches GridCells.Fixed(2)
+    private fun swapCards(state: MainUiState, index: Int, direction: Direction): MainUiState {
+        val columns = 2
+        val toIndex = calculateNewIndex(index, direction, state.codes.size, columns)
+        return if (toIndex != null) {
+            val newCodes = state.codes.toMutableList().apply {
+                val fromCard = this[index]
+                val toCard = this[toIndex]
+                // swap without regenerating the moved card’s id
+                this[index] = toCard.copy(id = java.util.UUID.randomUUID().toString()) // new id for the displaced card
+                this[toIndex] = fromCard // keep original id for the moved card
+            }
+            // if the moved card was being edited, keep it in edit mode
+            val newEditingCardId = if (state.editingCardId == state.codes[index].id) {
+                state.codes[index].id // use the original id, now at toIndex
+            } else {
+                state.editingCardId
+            }
+            state.copy(codes = newCodes, editingCardId = newEditingCardId)
+        } else state
+    }
+
+    private fun calculateNewIndex(index: Int, direction: Direction, size: Int, columns: Int): Int? {
         val row = index / columns
         val col = index % columns
-        val totalRows = (state.codes.size + columns - 1) / columns
-
-        val toIndex = when (direction) {
-            Direction.UP -> if (row == 0) return else index - columns
-            Direction.DOWN -> if (row == totalRows - 1) return else index + columns
-            Direction.LEFT -> if (col == 0) return else index - 1
-            Direction.RIGHT -> if (col == columns - 1) return else index + 1
-        }
-
-        if (toIndex !in state.codes.indices) return
-
-        viewModelScope.launch {
-            _uiState.update { state ->
-                val fromCard = state.codes[index]
-                val toCard = state.codes[toIndex]
-                val newCodes = state.codes.toMutableList().apply {
-                    this[index] = AuthCard(
-                        id = UUID.randomUUID().toString(),
-                        name = toCard.name,
-                        seed = toCard.seed
-                    )
-                    this[toIndex] = AuthCard(
-                        id = UUID.randomUUID().toString(),
-                        name = fromCard.name,
-                        seed = fromCard.seed
-                    )
-                }
-                state.copy(codes = newCodes, editingIndex = toIndex)
-            }
-            saveCodes()
+        val totalRows = (size + columns - 1) / columns
+        return when (direction) {
+            Direction.UP -> if (row > 0) index - columns else null
+            Direction.DOWN -> if (row < totalRows - 1 && index + columns < size) index + columns else null
+            Direction.LEFT -> if (col > 0) index - 1 else null
+            Direction.RIGHT -> if (col < columns - 1 && index + 1 < size) index + 1 else null
         }
     }
 
-    fun setEditingIndex(index: Int?) {
+    private fun scheduleHighlightClear(cardId: String) {
         viewModelScope.launch {
-            _uiState.update { state ->
-                if (index != null && state.highlightedIndex != null) {
-                    Log.d("MainViewModel", "clearing highlight due to editing start: $index")
-                    state.copy(editingIndex = index, highlightedIndex = null)
-                } else {
-                    state.copy(editingIndex = index)
-                }
+            delay(HIGHLIGHT_DELAY_MS)
+            if (_uiState.value.highlightedCardId == cardId) {
+                dispatch(AuthCommand.ClearHighlight(cardId))
             }
         }
     }
 
-    fun setThemeMode(mode: ThemeMode) {
-        prefs?.edit { putString("theme_preference", mode.name) }
-        _uiState.update { it.copy(themeMode = mode) }
-    }
-
-    fun setHighlightedIndex(index: Int?) {
-        viewModelScope.launch {
-            _uiState.update { state ->
-                if (index != null && state.editingIndex != null) {
-                    Log.d("MainViewModel", "highlight rejected: editing active at ${state.editingIndex}")
-                    state
-                } else {
-                    Log.d("MainViewModel", "setting highlight to $index")
-                    state.copy(highlightedIndex = index)
-                }
-            }
-            if (index != null && _uiState.value.editingIndex == null) {
-                delay(highlight_delay_ms)
-                _uiState.update { it.copy(highlightedIndex = null) }
-            }
-        }
-    }
-
-    fun requestDelete(cardId: String) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(pendingDeleteCardId = cardId) }
-        }
-    }
-
-    fun confirmDelete() {
-        val cardId = _uiState.value.pendingDeleteCardId ?: return
-        viewModelScope.launch {
-            val index = _uiState.value.codes.indexOfFirst { it.id == cardId }
-            if (index >= 0) {
-                _uiState.update { state ->
-                    val newCodes = state.codes.toMutableList().apply { removeAt(index) }
-                    state.copy(codes = newCodes, pendingDeleteCardId = null)
-                }
-                saveCodes()
-            }
-        }
-    }
-
-    fun cancelDelete() {
-        _uiState.update { it.copy(pendingDeleteCardId = null) }
-    }
-
-    fun clearError() {
-        _uiState.update { it.copy(errorMessage = null) }
-    }
-
-    fun setError(message: String?) {
-        _uiState.update { it.copy(errorMessage = message) }
-    }
-
-    fun exportSeeds(): String? {
+    private fun saveCodes(codes: List<AuthCard>) {
         val preferences = prefs ?: run {
-            _uiState.update { it.copy(errorMessage = "Storage unavailable.") }
-            return null
+            _uiState.update { it.copy(errorMessage = "Storage unavailable. Changes won’t persist.") }
+            return
         }
-        return try {
-            preferences.getString("auth_codes_list", "[]") ?: "[]"
+        try {
+            val pairs = codes.map { it.name to it.seed }
+            val json = Json.encodeToString(pairs)
+            preferences.edit { putString("auth_codes_list", json) }
         } catch (e: Exception) {
-            _uiState.update { it.copy(errorMessage = "Failed to export seeds.") }
-            null
+            _uiState.update { it.copy(errorMessage = "Failed to save changes.") }
         }
+    }
+
+    private fun loadCodes() {
+        val preferences = prefs ?: run {
+            android.util.Log.w("MainViewModel", "prefs unavailable - using in-memory storage")
+            return
+        }
+        try {
+            val json = preferences.getString("auth_codes_list", "[]") ?: "[]"
+            val loadedPairs = try {
+                Json.decodeFromString<List<Pair<String, String>>>(json)
+            } catch (_: Exception) {
+                Json.decodeFromString<List<ExportEntry>>(json).map { it.name to it.seed }
+            }
+            _uiState.update {
+                it.copy(codes = loadedPairs.map { AuthCard("${it.first}-${it.second.hashCode()}", it.first, it.second) })
+            }
+        } catch (e: Exception) {
+            _uiState.update { it.copy(errorMessage = "Failed to load saved codes.") }
+        }
+    }
+
+    private fun saveThemeMode(mode: ThemeMode) {
+        prefs?.edit { putString("theme_preference", mode.name) }
     }
 
     private fun loadThemeMode() {
@@ -235,33 +213,20 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
-    private fun loadCodes() {
-        val preferences = prefs ?: run {
-            Log.w("MainViewModel", "prefs unavailable - using in-memory storage")
-            return
-        }
-        try {
-            val json = preferences.getString("auth_codes_list", "[]") ?: "[]"
-            val loadedPairs = Json.decodeFromString<List<Pair<String, String>>>(json)
-            _uiState.update {
-                it.copy(codes = loadedPairs.map { AuthCard("${it.first}-${it.second.hashCode()}", it.first, it.second) })
-            }
-        } catch (e: Exception) {
-            _uiState.update { it.copy(errorMessage = "Failed to load saved codes.") }
-        }
-    }
+    @Serializable
+    private data class ExportEntry(val name: String, val seed: String)
 
-    private fun saveCodes() {
+    fun exportSeedsAsJson(): String? {
         val preferences = prefs ?: run {
-            _uiState.update { it.copy(errorMessage = "Storage unavailable. Changes won’t persist.") }
-            return
+            _uiState.update { it.copy(errorMessage = "Storage unavailable.") }
+            return null
         }
-        try {
-            val pairs = _uiState.value.codes.map { it.name to it.seed }
-            val json = Json.encodeToString(pairs)
-            preferences.edit { putString("auth_codes_list", json) }
+        return try {
+            val codes = _uiState.value.codes.map { ExportEntry(it.name, it.seed) }
+            Json.encodeToString(codes)
         } catch (e: Exception) {
-            _uiState.update { it.copy(errorMessage = "Failed to save changes.") }
+            _uiState.update { it.copy(errorMessage = "Failed to export seeds.") }
+            null
         }
     }
 
@@ -295,15 +260,10 @@ class MainViewModel(private val context: Context) : ViewModel() {
     }
 }
 
-enum class Direction {
-    UP, DOWN, LEFT, RIGHT
-}
+enum class Direction { UP, DOWN, LEFT, RIGHT }
+enum class ThemeMode { SYSTEM, DAY, NIGHT }
 
-enum class ThemeMode {
-    SYSTEM, DAY, NIGHT
-}
-
-class MainViewModelFactory(private val context: Context) : ViewModelProvider.Factory {
+class MainViewModelFactory(private val context: Context) : androidx.lifecycle.ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")

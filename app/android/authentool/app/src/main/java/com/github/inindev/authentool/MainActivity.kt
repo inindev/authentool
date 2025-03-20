@@ -66,18 +66,20 @@ import androidx.core.content.getSystemService
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.snapshotFlow
 import androidx.core.net.toUri
+import com.github.inindev.authentool.ui.theme.AppColorTheme
+import com.github.inindev.authentool.ui.theme.customColorScheme
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-import com.github.inindev.authentool.ui.theme.AppColorTheme
-import com.github.inindev.authentool.ui.theme.customColorScheme
-
-const val highlight_delay_ms = 8000L
-private const val error_display_duration_ms = 2000L
-private const val animation_duration_ms = 100
+const val HIGHLIGHT_DELAY_MS = 8000L
+private const val ERROR_DISPLAY_DURATION_MS = 2000L
+private const val ANIMATION_DURATION_MS = 100
+private const val DATE_FORMAT = "yyyyMMdd"
+private const val APP_NAME = "authentool"
 
 // countdown bar placement
 private enum class CountdownLocation {
@@ -119,8 +121,14 @@ fun MainActivityContent(viewModel: MainViewModel) {
                     message = message,
                     duration = SnackbarDuration.Long
                 )
-                viewModel.clearError()
+                viewModel.dispatch(AuthCommand.SetError(null))
             }
+        }
+    }
+
+    BackHandler(enabled = true) {
+        if (showAddDialog) {
+            showAddDialog = false
         }
     }
 
@@ -137,14 +145,24 @@ fun MainActivityContent(viewModel: MainViewModel) {
                 modifier = Modifier.fillMaxSize(),
                 topBar = {
                     TopAppBar(
-                        title = { Text("Authentool", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.customColorScheme.TopBarText) },
+                        title = {
+                            Text(
+                                "Authentool",
+                                style = MaterialTheme.typography.headlineLarge,
+                                color = MaterialTheme.customColorScheme.TopBarText
+                            )
+                        },
                         colors = TopAppBarDefaults.topAppBarColors(
                             containerColor = MaterialTheme.customColorScheme.TopBarBackground,
                             titleContentColor = MaterialTheme.customColorScheme.TopBarText
                         ),
                         actions = {
                             IconButton(onClick = { showAddDialog = true }) {
-                                Icon(Icons.Default.Add, contentDescription = "add entry", tint = MaterialTheme.customColorScheme.TopBarText)
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = "add entry",
+                                    tint = MaterialTheme.customColorScheme.TopBarText
+                                )
                             }
                         }
                     )
@@ -161,30 +179,10 @@ fun MainActivityContent(viewModel: MainViewModel) {
                         AddEntryDialog(
                             onDismiss = { showAddDialog = false },
                             onAdd = { name, seed ->
-                                viewModel.addAuthCode(name, seed)
+                                viewModel.dispatch(AuthCommand.AddCard(name, seed))
                                 showAddDialog = false
                             }
                         )
-                    }
-                    uiState.pendingDeleteCardId?.let { cardId ->
-                        val card = uiState.codes.find { it.id == cardId }
-                        card?.let {
-                            AlertDialog(
-                                onDismissRequest = { viewModel.cancelDelete() },
-                                title = { Text("Delete Entry", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.titleLarge) },
-                                text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.bodyLarge) },
-                                confirmButton = {
-                                    TextButton(onClick = { viewModel.confirmDelete() }) {
-                                        Text("delete", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
-                                    }
-                                },
-                                dismissButton = {
-                                    TextButton(onClick = { viewModel.cancelDelete() }) {
-                                        Text("cancel", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)
-                                    }
-                                }
-                            )
-                        }
                     }
                 }
             }
@@ -201,7 +199,7 @@ fun AuthGrid(
     val countdownProgress by viewModel.countdownProgress.collectAsState()
     val animatedProgress by animateFloatAsState(
         targetValue = countdownProgress,
-        animationSpec = tween(durationMillis = animation_duration_ms, easing = LinearEasing),
+        animationSpec = tween(durationMillis = ANIMATION_DURATION_MS, easing = LinearEasing),
         label = "countdownProgress"
     )
     val codes = uiState.codes
@@ -213,12 +211,13 @@ fun AuthGrid(
     val density = LocalDensity.current
     val columns = 2
 
-    // log recomposition only when codes change
-    LaunchedEffect(codes) {
-        Log.d("MainActivity", "authgrid: recomposing with ${codes.size} codes: ${codes.map { it.name }}")
+    // generate filename with current date
+    val fileName by produceState(initialValue = "") {
+        val date = java.text.SimpleDateFormat(DATE_FORMAT, java.util.Locale.US)
+            .format(java.util.Date())
+        value = "${APP_NAME}_${date}.json"
     }
 
-    var editedName by remember { mutableStateOf<String?>(null) }
     var showSystemMenu by remember { mutableStateOf(false) }
     var menuOffset by remember { mutableStateOf(DpOffset(0.dp, 0.dp)) }
     var showThemeSubmenu by remember { mutableStateOf(false) }
@@ -233,10 +232,10 @@ fun AuthGrid(
                 val removableVolume = storageVolumes.firstOrNull { it.second }
                 removableVolume?.let { (dir, _) ->
                     val volume = storageManager?.storageVolumes?.find { it.directory == dir }
-                    volume?.uuid?.let { uuid ->
+                    volume?.let {
                         intent.putExtra(
                             DocumentsContract.EXTRA_INITIAL_URI,
-                            "content://com.android.externalstorage.documents/document/primary:$uuid".toUri()
+                            it.uuid?.let { "content://com.android.externalstorage.documents/document/$it:$fileName".toUri() }
                         )
                     }
                 }
@@ -245,22 +244,22 @@ fun AuthGrid(
         }
     ) { uri ->
         uri?.let {
-            viewModel.exportSeeds()?.let { seedsJson ->
+            viewModel.exportSeedsAsJson()?.let { seedsJson ->
                 context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                    outputStream.write(seedsJson.toByteArray())
-                } ?: Log.e("MainActivity", "AuthGrid: Failed to open output stream for uri $it")
+                    outputStream.write(seedsJson.toByteArray(Charsets.UTF_8))
+                } ?: Log.e("MainActivity", "authgrid: failed to open output stream for uri $it")
                 coroutineScope.launch {
-                    viewModel.setError("Backup saved to USB.")
-                    delay(error_display_duration_ms)
-                    viewModel.clearError()
+                    viewModel.dispatch(AuthCommand.SetError("Backup saved to USB"))
+                    delay(ERROR_DISPLAY_DURATION_MS)
+                    viewModel.dispatch(AuthCommand.SetError(null))
                 }
             }
             showBackupDialog = false
         } ?: run {
             coroutineScope.launch {
-                viewModel.setError("Failed to save backup.")
-                delay(error_display_duration_ms)
-                viewModel.clearError()
+                viewModel.dispatch(AuthCommand.SetError("Failed to save backup"))
+                delay(ERROR_DISPLAY_DURATION_MS)
+                viewModel.dispatch(AuthCommand.SetError(null))
             }
         }
     }
@@ -289,7 +288,6 @@ fun AuthGrid(
         }
     }
 
-    BackHandler(enabled = uiState.editingIndex == null && !showSystemMenu) { /* ignore */ }
     BackHandler(enabled = showSystemMenu || showBackupDialog) {
         if (showThemeSubmenu) {
             showThemeSubmenu = false
@@ -304,21 +302,10 @@ fun AuthGrid(
         AuthCardUiState(
             card = card,
             totpCode = totpCodes.getOrElse(index) { "000000" },
-            isEditing = uiState.editingIndex == index,
-            isHighlighted = uiState.highlightedIndex == index,
+            isEditing = uiState.editingCardId == card.id,
+            isHighlighted = uiState.highlightedCardId == card.id,
             position = GridPosition(index, index / columns, index % columns)
         )
-    }
-
-    val controller = object : AuthCardController {
-        override fun onCopyCode(code: String) { /* handled in composable */ }
-        override fun onEditStarted(cardId: String) = viewModel.setEditingIndex(codes.indexOfFirst { it.id == cardId })
-        override fun onEditName(cardId: String, newName: String) = viewModel.updateAuthCodeName(codes.indexOfFirst { it.id == cardId }, newName)
-        override fun startEdit(state: AuthCardUiState) = viewModel.setEditingIndex(codes.indexOfFirst { it.id == state.card.id })
-        override fun onEditDismissed(cardId: String) = viewModel.setEditingIndex(null)
-        override fun onDelete(cardId: String) = viewModel.requestDelete(cardId)
-        override fun onMove(cardId: String, direction: Direction) = viewModel.swapAuthCode(codes.indexOfFirst { it.id == cardId }, direction)
-        override fun onHighlight(cardId: String) = viewModel.setHighlightedIndex(codes.indexOfFirst { it.id == cardId })
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -343,19 +330,13 @@ fun AuthGrid(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onTap = {
-                                    if (uiState.editingIndex != null) {
-                                        editedName?.let { name ->
-                                            val editingIndex = uiState.editingIndex!!
-                                            if (name != codes[editingIndex].name) {
-                                                viewModel.updateAuthCodeName(editingIndex, name)
-                                            }
-                                        }
-                                        viewModel.setEditingIndex(null)
+                                    uiState.editingCardId?.let { cardId ->
+                                        viewModel.dispatch(AuthCommand.StopEditing(cardId))
                                     }
                                 },
                                 onLongPress = { offset ->
-                                    if (uiState.editingIndex == null) {
-                                        Log.d("MainActivity", "AuthGrid: Background long press at $offset")
+                                    if (uiState.editingCardId == null) {
+                                        Log.d("MainActivity", "authgrid: background long press at $offset")
                                         with(density) {
                                             menuOffset = DpOffset(offset.x.toDp(), offset.y.toDp())
                                         }
@@ -371,7 +352,7 @@ fun AuthGrid(
                         items = cardStates,
                         key = { _, state -> state.card.id }
                     ) { _, state ->
-                        AuthenticatorCard(state = state, controller = controller)
+                        AuthenticatorCard(state = state, viewModel = viewModel)
                     }
                 }
                 SystemMenu(
@@ -379,17 +360,17 @@ fun AuthGrid(
                     showThemeSubmenu = showThemeSubmenu,
                     menuOffset = menuOffset,
                     themeMode = uiState.themeMode,
-                    onThemeSelected = { viewModel.setThemeMode(it) },
+                    onThemeSelected = { viewModel.dispatch(AuthCommand.SetTheme(it)) },
                     onBackupRequested = { showBackupDialog = true },
                     onDismiss = { showSystemMenu = false; showThemeSubmenu = false },
                     onThemeSubmenuToggle = { showThemeSubmenu = it }
                 )
                 BackupDialog(
-                    showBackupDialog = showBackupDialog,
+                    showBackupDialog = showBackupDialog && fileName.isNotEmpty(),
                     storageVolumes = storageVolumes,
                     storageManager = storageManager,
                     context = context,
-                    onSaveRequested = { saveFileLauncher.launch("authentool_seeds_${System.currentTimeMillis()}.json") },
+                    onSaveRequested = { saveFileLauncher.launch(fileName) },
                     onDismiss = { showBackupDialog = false },
                     onRetry = {
                         storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
