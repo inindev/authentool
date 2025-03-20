@@ -19,18 +19,16 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-
-data class AuthCardData(val name: String, val seed: String) {
-    internal val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seed))
-}
+import java.util.UUID
 
 data class MainUiState(
-    val codes: List<AuthCardData> = emptyList(),
+    val codes: List<AuthCard> = emptyList(),
     val totpCodes: List<String> = emptyList(),
     val editingIndex: Int? = null,
     val errorMessage: String? = null,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val highlightedIndex: Int? = null
+    val highlightedIndex: Int? = null,
+    val pendingDeleteCardId: String? = null
 )
 
 @SuppressLint("StaticFieldLeak") // safe with application context
@@ -71,7 +69,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     fun addAuthCode(name: String, seed: String) {
         viewModelScope.launch {
             try {
-                val newCard = AuthCardData(name, seed)
+                val newCard = AuthCard(name = name, seed = seed)
                 _uiState.update { state ->
                     val newCodes = state.codes + newCard
                     state.copy(codes = newCodes)
@@ -100,7 +98,8 @@ class MainViewModel(private val context: Context) : ViewModel() {
         viewModelScope.launch {
             _uiState.update { state ->
                 val newCodes = state.codes.toMutableList().apply {
-                    this[index] = AuthCardData(newName, this[index].seed)
+                    val oldCard = this[index]
+                    this[index] = AuthCard(oldCard.id, newName, oldCard.seed)
                 }
                 state.copy(codes = newCodes)
             }
@@ -118,34 +117,31 @@ class MainViewModel(private val context: Context) : ViewModel() {
         val totalRows = (state.codes.size + columns - 1) / columns
 
         val toIndex = when (direction) {
-            Direction.UP -> {
-                if (row == 0) return // cannot move up from first row
-                index - columns
-            }
-            Direction.DOWN -> {
-                if (row == totalRows - 1) return // cannot move down from last row
-                index + columns
-            }
-            Direction.LEFT -> {
-                if (col == 0) return // cannot move left from left column
-                index - 1
-            }
-            Direction.RIGHT -> {
-                if (col == columns - 1) return // cannot move right from right column
-                index + 1
-            }
+            Direction.UP -> if (row == 0) return else index - columns
+            Direction.DOWN -> if (row == totalRows - 1) return else index + columns
+            Direction.LEFT -> if (col == 0) return else index - 1
+            Direction.RIGHT -> if (col == columns - 1) return else index + 1
         }
 
         if (toIndex !in state.codes.indices) return
 
         viewModelScope.launch {
             _uiState.update { state ->
+                val fromCard = state.codes[index]
+                val toCard = state.codes[toIndex]
                 val newCodes = state.codes.toMutableList().apply {
-                    val temp = this[index]
-                    this[index] = this[toIndex]
-                    this[toIndex] = temp
+                    this[index] = AuthCard(
+                        id = UUID.randomUUID().toString(),
+                        name = toCard.name,
+                        seed = toCard.seed
+                    )
+                    this[toIndex] = AuthCard(
+                        id = UUID.randomUUID().toString(),
+                        name = fromCard.name,
+                        seed = fromCard.seed
+                    )
                 }
-                state.copy(codes = newCodes)
+                state.copy(codes = newCodes, editingIndex = toIndex)
             }
             saveCodes()
         }
@@ -187,6 +183,30 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
+    fun requestDelete(cardId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(pendingDeleteCardId = cardId) }
+        }
+    }
+
+    fun confirmDelete() {
+        val cardId = _uiState.value.pendingDeleteCardId ?: return
+        viewModelScope.launch {
+            val index = _uiState.value.codes.indexOfFirst { it.id == cardId }
+            if (index >= 0) {
+                _uiState.update { state ->
+                    val newCodes = state.codes.toMutableList().apply { removeAt(index) }
+                    state.copy(codes = newCodes, pendingDeleteCardId = null)
+                }
+                saveCodes()
+            }
+        }
+    }
+
+    fun cancelDelete() {
+        _uiState.update { it.copy(pendingDeleteCardId = null) }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
     }
@@ -223,7 +243,9 @@ class MainViewModel(private val context: Context) : ViewModel() {
         try {
             val json = preferences.getString("auth_codes_list", "[]") ?: "[]"
             val loadedPairs = Json.decodeFromString<List<Pair<String, String>>>(json)
-            _uiState.update { it.copy(codes = loadedPairs.map { AuthCardData(it.first, it.second) }) }
+            _uiState.update {
+                it.copy(codes = loadedPairs.map { AuthCard("${it.first}-${it.second.hashCode()}", it.first, it.second) })
+            }
         } catch (e: Exception) {
             _uiState.update { it.copy(errorMessage = "Failed to load saved codes.") }
         }
@@ -258,7 +280,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
                 _countdownProgress.value = progress
 
                 if (epoch != lastEpoch) {
-                    val currentCodes = _uiState.value.codes.map { it.generator.generateCode() }
+                    val currentCodes = _uiState.value.codes.map { it.generateTotpCode() }
                     _uiState.update { it.copy(totpCodes = currentCodes) }
                     lastEpoch = epoch
                 }
