@@ -67,7 +67,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.snapshotFlow
 import androidx.core.net.toUri
 import com.github.inindev.authentool.ui.theme.AppColorTheme
 import com.github.inindev.authentool.ui.theme.customColorScheme
@@ -212,10 +211,10 @@ fun AuthGrid(
     val columns = 2
 
     // generate filename with current date
-    val fileName by produceState(initialValue = "") {
+    val fileName by produceState(initialValue = "authentool_backup.enc") {
         val date = java.text.SimpleDateFormat(DATE_FORMAT, java.util.Locale.US)
             .format(java.util.Date())
-        value = "${APP_NAME}_${date}.json"
+        value = "${APP_NAME}_${date}.enc"
     }
 
     var showSystemMenu by remember { mutableStateOf(false) }
@@ -223,31 +222,40 @@ fun AuthGrid(
     var showThemeSubmenu by remember { mutableStateOf(false) }
     var showBackupDialog by remember { mutableStateOf(false) }
     var storageVolumes by remember { mutableStateOf(emptyList<Pair<File, Boolean>>()) }
+    var backupPassword by remember { mutableStateOf("") }
 
     // custom contract to set initial uri to removable storage
     val saveFileLauncher = rememberLauncherForActivityResult(
-        object : ActivityResultContracts.CreateDocument("application/json") {
+        object : ActivityResultContracts.CreateDocument("application/octet-stream") {
             override fun createIntent(context: Context, input: String): Intent {
                 val intent = super.createIntent(context, input)
-                val removableVolume = storageVolumes.firstOrNull { it.second }
-                removableVolume?.let { (dir, _) ->
-                    val volume = storageManager?.storageVolumes?.find { it.directory == dir }
-                    volume?.let {
-                        intent.putExtra(
-                            DocumentsContract.EXTRA_INITIAL_URI,
-                            it.uuid?.let { "content://com.android.externalstorage.documents/document/$it:$fileName".toUri() }
-                        )
+                val removableVolumes = storageVolumes.filter { it.second }
+                if (removableVolumes.isNotEmpty()) {
+                    val usbVolume = storageManager?.storageVolumes?.find { vol ->
+                        vol.isRemovable && vol.directory != null && removableVolumes.any { it.first == vol.directory }
                     }
+                    usbVolume?.let { vol ->
+                        val uuid = vol.uuid
+                        if (uuid != null) {
+                            val usbUri = "content://com.android.externalstorage.documents/document/$uuid%3A$input".toUri()
+                            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, usbUri)
+                            Log.d("MainActivity", "Set initial URI to USB: $usbUri")
+                        } else {
+                            Log.w("MainActivity", "USB volume found but UUID is null")
+                        }
+                    } ?: Log.w("MainActivity", "No removable USB volume found despite removableVolumes not empty")
+                } else {
+                    Log.w("MainActivity", "No removable volumes detected")
                 }
                 return intent
             }
         }
     ) { uri ->
         uri?.let {
-            viewModel.exportSeedsAsJson()?.let { seedsJson ->
+            viewModel.exportSeedsCrypt(backupPassword)?.let { seedsJson ->
                 context.contentResolver.openOutputStream(it)?.use { outputStream ->
                     outputStream.write(seedsJson.toByteArray(Charsets.UTF_8))
-                } ?: Log.e("MainActivity", "authgrid: failed to open output stream for uri $it")
+                } ?: Log.e("MainActivity", "AuthGrid: Failed to open output stream for uri $it")
                 coroutineScope.launch {
                     viewModel.dispatch(AuthCommand.SetError("Backup saved to USB"))
                     delay(ERROR_DISPLAY_DURATION_MS)
@@ -255,6 +263,7 @@ fun AuthGrid(
                 }
             }
             showBackupDialog = false
+            backupPassword = "" // Clear password after use
         } ?: run {
             coroutineScope.launch {
                 viewModel.dispatch(AuthCommand.SetError("Failed to save backup"))
@@ -270,21 +279,7 @@ fun AuthGrid(
             storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
                 volume.directory?.let { it to volume.isRemovable }
             } ?: emptyList()
-        }
-    }
-
-    // poll storage changes efficiently while dialog is open
-    LaunchedEffect(showBackupDialog) {
-        if (showBackupDialog) {
-            snapshotFlow {
-                storageManager?.storageVolumes?.mapNotNull { volume ->
-                    volume.directory?.let { it to volume.isRemovable }
-                } ?: emptyList()
-            }.collect { newStorageVolumes ->
-                if (newStorageVolumes != storageVolumes) {
-                    storageVolumes = newStorageVolumes
-                }
-            }
+            Log.d("MainActivity", "Storage volumes updated: ${storageVolumes.map { "${it.first.path} (removable=${it.second})" }}")
         }
     }
 
@@ -336,7 +331,7 @@ fun AuthGrid(
                                 },
                                 onLongPress = { offset ->
                                     if (uiState.editingCardId == null) {
-                                        Log.d("MainActivity", "authgrid: background long press at $offset")
+                                        Log.d("MainActivity", "AuthGrid: Background long press at $offset")
                                         with(density) {
                                             menuOffset = DpOffset(offset.x.toDp(), offset.y.toDp())
                                         }
@@ -370,7 +365,10 @@ fun AuthGrid(
                     storageVolumes = storageVolumes,
                     storageManager = storageManager,
                     context = context,
-                    onSaveRequested = { saveFileLauncher.launch(fileName) },
+                    onSaveRequested = { password ->
+                        backupPassword = password
+                        saveFileLauncher.launch(fileName)
+                    },
                     onDismiss = { showBackupDialog = false },
                     onRetry = {
                         storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
@@ -549,13 +547,15 @@ fun BackupDialog(
     storageVolumes: List<Pair<File, Boolean>>,
     storageManager: StorageManager?,
     context: Context,
-    onSaveRequested: () -> Unit,
+    onSaveRequested: (String) -> Unit,
     onDismiss: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (!showBackupDialog) return
 
+    var password by remember { mutableStateOf("") }
+    var passwordError by remember { mutableStateOf<String?>(null) }
     val colors = MaterialTheme.customColorScheme
     val removableVolumes = storageVolumes.filter { it.second }
 
@@ -565,6 +565,15 @@ fun BackupDialog(
         title = { Text("Backup to External Storage", color = colors.AppText) },
         text = {
             Column {
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Encryption Password", color = colors.AppText) },
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = passwordError != null,
+                    supportingText = passwordError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
                 when {
                     removableVolumes.isEmpty() -> Text(
                         "No removable storage detected. Please insert a USB drive and press 'Retry'.",
@@ -591,7 +600,14 @@ fun BackupDialog(
         },
         confirmButton = {
             if (removableVolumes.isNotEmpty()) {
-                TextButton(onClick = onSaveRequested) {
+                TextButton(onClick = {
+                    if (password.isBlank()) {
+                        passwordError = "Password cannot be empty"
+                    } else {
+                        passwordError = null
+                        onSaveRequested(password)
+                    }
+                }) {
                     Text("Save", color = colors.CardTotp)
                 }
             } else {

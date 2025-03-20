@@ -216,14 +216,15 @@ class MainViewModel(private val context: Context) : ViewModel() {
     @Serializable
     private data class ExportEntry(val name: String, val seed: String)
 
-    fun exportSeedsAsJson(): String? {
+    fun exportSeedsCrypt(password: String): String? {
         val preferences = prefs ?: run {
             _uiState.update { it.copy(errorMessage = "Storage unavailable.") }
             return null
         }
         return try {
             val codes = _uiState.value.codes.map { ExportEntry(it.name, it.seed) }
-            Json.encodeToString(codes)
+            val json = Json.encodeToString(codes)
+            json.encrypt(password)
         } catch (e: Exception) {
             _uiState.update { it.copy(errorMessage = "Failed to export seeds.") }
             null
