@@ -231,6 +231,27 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
+    fun importSeedsCrypt(encryptedData: String, password: String): Int? {
+        return try {
+            val json = encryptedData.decrypt(password)
+            val entries = Json.decodeFromString<List<ExportEntry>>(json)
+            val newCards = entries.map { AuthCard(name = it.name, seed = it.seed) }
+            viewModelScope.launch {
+                _uiState.update { current ->
+                    val uniqueCards = newCards.filter { newCard ->
+                        current.codes.none { it.name == newCard.name && it.seed == newCard.seed }
+                    }
+                    current.copy(codes = current.codes + uniqueCards)
+                }
+                saveCodes(_uiState.value.codes)
+            }
+            newCards.size
+        } catch (e: Exception) {
+            _uiState.update { it.copy(errorMessage = "Restore failed: ${e.message}") }
+            null
+        }
+    }
+
     private fun startCountdown() {
         countdownJob?.cancel()
         countdownJob = viewModelScope.launch {

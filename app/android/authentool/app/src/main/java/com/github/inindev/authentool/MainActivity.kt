@@ -221,31 +221,34 @@ fun AuthGrid(
     var menuOffset by remember { mutableStateOf(DpOffset(0.dp, 0.dp)) }
     var showThemeSubmenu by remember { mutableStateOf(false) }
     var showBackupDialog by remember { mutableStateOf(false) }
+    var showRestoreDialog by remember { mutableStateOf(false) }
+    var showRestorePasswordDialog by remember { mutableStateOf(false) }
+    var encryptedData by remember { mutableStateOf<String?>(null) }
     var storageVolumes by remember { mutableStateOf(emptyList<Pair<File, Boolean>>()) }
     var backupPassword by remember { mutableStateOf("") }
 
-    // custom contract to set initial uri to removable storage
+    // custom contract to set initial uri to removable storage only
     val saveFileLauncher = rememberLauncherForActivityResult(
         object : ActivityResultContracts.CreateDocument("application/octet-stream") {
             override fun createIntent(context: Context, input: String): Intent {
                 val intent = super.createIntent(context, input)
                 val removableVolumes = storageVolumes.filter { it.second }
-                if (removableVolumes.isNotEmpty()) {
+                if (removableVolumes.isEmpty()) {
+                    Log.w("MainActivity", "No removable volumes detected - backup aborted")
+                    coroutineScope.launch {
+                        viewModel.dispatch(AuthCommand.SetError("No removable storage detected"))
+                        delay(ERROR_DISPLAY_DURATION_MS)
+                        viewModel.dispatch(AuthCommand.SetError(null))
+                    }
+                } else {
                     val usbVolume = storageManager?.storageVolumes?.find { vol ->
                         vol.isRemovable && vol.directory != null && removableVolumes.any { it.first == vol.directory }
                     }
-                    usbVolume?.let { vol ->
-                        val uuid = vol.uuid
-                        if (uuid != null) {
-                            val usbUri = "content://com.android.externalstorage.documents/document/$uuid%3A$input".toUri()
-                            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, usbUri)
-                            Log.d("MainActivity", "Set initial URI to USB: $usbUri")
-                        } else {
-                            Log.w("MainActivity", "USB volume found but UUID is null")
-                        }
-                    } ?: Log.w("MainActivity", "No removable USB volume found despite removableVolumes not empty")
-                } else {
-                    Log.w("MainActivity", "No removable volumes detected")
+                    usbVolume?.uuid?.let { uuid ->
+                        val usbUri = "content://com.android.externalstorage.documents/document/$uuid%3A$input".toUri()
+                        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, usbUri)
+                        Log.d("MainActivity", "Set initial URI to USB: $usbUri")
+                    } ?: Log.w("MainActivity", "No valid removable USB volume found")
                 }
                 return intent
             }
@@ -273,9 +276,44 @@ fun AuthGrid(
         }
     }
 
-    // implicit refresh when dialog opens
-    LaunchedEffect(showBackupDialog) {
-        if (showBackupDialog) {
+    // custom contract for restore from removable storage only
+    val restoreFileLauncher = rememberLauncherForActivityResult(
+        object : ActivityResultContracts.OpenDocument() {
+            override fun createIntent(context: Context, input: Array<String>): Intent {
+                val intent = super.createIntent(context, input)
+                val removableVolumes = storageVolumes.filter { it.second }
+                if (removableVolumes.isEmpty()) {
+                    Log.w("MainActivity", "No removable volumes detected for restore - restore aborted")
+                    coroutineScope.launch {
+                        viewModel.dispatch(AuthCommand.SetError("No removable storage detected"))
+                        delay(ERROR_DISPLAY_DURATION_MS)
+                        viewModel.dispatch(AuthCommand.SetError(null))
+                    }
+                } else {
+                    val usbVolume = storageManager?.storageVolumes?.find { vol ->
+                        vol.isRemovable && vol.directory != null && removableVolumes.any { it.first == vol.directory }
+                    }
+                    usbVolume?.uuid?.let { uuid ->
+                        val usbUri = "content://com.android.externalstorage.documents/document/$uuid%3A".toUri()
+                        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, usbUri)
+                        Log.d("MainActivity", "Set initial URI to USB for restore: $usbUri")
+                    } ?: Log.w("MainActivity", "No valid removable USB volume found")
+                }
+                return intent
+            }
+        }
+    ) { uri ->
+        uri?.let {
+            context.contentResolver.openInputStream(it)?.use { inputStream ->
+                encryptedData = inputStream.readBytes().toString(Charsets.UTF_8)
+                showRestorePasswordDialog = true
+            }
+        }
+    }
+
+    // implicit refresh when backup or restore dialog opens
+    LaunchedEffect(showBackupDialog, showRestoreDialog) {
+        if (showBackupDialog || showRestoreDialog) {
             storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
                 volume.directory?.let { it to volume.isRemovable }
             } ?: emptyList()
@@ -283,11 +321,16 @@ fun AuthGrid(
         }
     }
 
-    BackHandler(enabled = showSystemMenu || showBackupDialog) {
+    BackHandler(enabled = showSystemMenu || showBackupDialog || showRestoreDialog || showRestorePasswordDialog) {
         if (showThemeSubmenu) {
             showThemeSubmenu = false
         } else if (showBackupDialog) {
             showBackupDialog = false
+        } else if (showRestoreDialog) {
+            showRestoreDialog = false
+        } else if (showRestorePasswordDialog) {
+            showRestorePasswordDialog = false
+            encryptedData = null
         } else {
             showSystemMenu = false
         }
@@ -357,6 +400,17 @@ fun AuthGrid(
                     themeMode = uiState.themeMode,
                     onThemeSelected = { viewModel.dispatch(AuthCommand.SetTheme(it)) },
                     onBackupRequested = { showBackupDialog = true },
+                    onRestoreRequested = {
+                        storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
+                            volume.directory?.let { it to volume.isRemovable }
+                        } ?: emptyList()
+                        val removableVolumes = storageVolumes.filter { it.second }
+                        if (removableVolumes.isNotEmpty()) {
+                            restoreFileLauncher.launch(arrayOf("application/octet-stream"))
+                        } else {
+                            showRestoreDialog = true
+                        }
+                    },
                     onDismiss = { showSystemMenu = false; showThemeSubmenu = false },
                     onThemeSubmenuToggle = { showThemeSubmenu = it }
                 )
@@ -374,6 +428,35 @@ fun AuthGrid(
                         storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
                             volume.directory?.let { it to volume.isRemovable }
                         } ?: emptyList()
+                    }
+                )
+                RestoreDialog(
+                    showRestoreDialog = showRestoreDialog,
+                    storageVolumes = storageVolumes,
+                    storageManager = storageManager,
+                    context = context,
+                    onRestoreRequested = {
+                        restoreFileLauncher.launch(arrayOf("application/octet-stream"))
+                    },
+                    onDismiss = { showRestoreDialog = false },
+                    onRetry = {
+                        storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
+                            volume.directory?.let { it to volume.isRemovable }
+                        } ?: emptyList()
+                        val removableVolumes = storageVolumes.filter { it.second }
+                        if (removableVolumes.isNotEmpty()) {
+                            restoreFileLauncher.launch(arrayOf("application/octet-stream"))
+                            showRestoreDialog = false
+                        }
+                    }
+                )
+                RestorePasswordDialog(
+                    showDialog = showRestorePasswordDialog,
+                    encryptedData = encryptedData,
+                    viewModel = viewModel,
+                    onDismiss = {
+                        showRestorePasswordDialog = false
+                        encryptedData = null
                     }
                 )
             }
@@ -475,6 +558,7 @@ fun SystemMenu(
     themeMode: ThemeMode,
     onThemeSelected: (ThemeMode) -> Unit,
     onBackupRequested: () -> Unit,
+    onRestoreRequested: () -> Unit,
     onDismiss: () -> Unit,
     onThemeSubmenuToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -497,6 +581,14 @@ fun SystemMenu(
                 text = { Text("Backup", color = colors.AppText, style = MaterialTheme.typography.bodyMedium) },
                 onClick = {
                     onBackupRequested()
+                    onDismiss()
+                },
+                modifier = Modifier.height(48.dp)
+            )
+            DropdownMenuItem(
+                text = { Text("Restore", color = colors.AppText, style = MaterialTheme.typography.bodyMedium) },
+                onClick = {
+                    onRestoreRequested()
                     onDismiss()
                 },
                 modifier = Modifier.height(48.dp)
@@ -555,9 +647,14 @@ fun BackupDialog(
     if (!showBackupDialog) return
 
     var password by remember { mutableStateOf("") }
-    var passwordError by remember { mutableStateOf<String?>(null) }
+    var passwordError by remember { mutableStateOf<String?>("Password must be at least 8 characters") }
     val colors = MaterialTheme.customColorScheme
     val removableVolumes = storageVolumes.filter { it.second }
+
+    LaunchedEffect(password) {
+        val trimmedPassword = password.trim()
+        passwordError = if (trimmedPassword.length < 8) "Password must be at least 8 characters" else null
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -568,10 +665,10 @@ fun BackupDialog(
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text("Encryption Password", color = colors.AppText) },
+                    label = { Text("Encryption Password (min 8 chars)", color = colors.AppText) },
                     modifier = Modifier.fillMaxWidth(),
                     isError = passwordError != null,
-                    supportingText = passwordError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } }
+                    supportingText = { Text(passwordError ?: " ", color = if (passwordError != null) MaterialTheme.colorScheme.error else colors.AppText) }
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 when {
@@ -600,20 +697,129 @@ fun BackupDialog(
         },
         confirmButton = {
             if (removableVolumes.isNotEmpty()) {
-                TextButton(onClick = {
-                    if (password.isBlank()) {
-                        passwordError = "Password cannot be empty"
-                    } else {
-                        passwordError = null
-                        onSaveRequested(password)
-                    }
-                }) {
+                TextButton(
+                onClick = {
+                        val trimmedPassword = password.trim()
+                        if (trimmedPassword.length >= 8) {
+                            onSaveRequested(trimmedPassword)
+                        }
+                    },
+                    enabled = password.trim().length >= 8
+                ) {
                     Text("Save", color = colors.CardTotp)
                 }
             } else {
                 TextButton(onClick = onRetry) {
                     Text("Retry", color = colors.CardTotp)
                 }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = colors.CardTotp)
+            }
+        }
+    )
+}
+
+@Composable
+fun RestoreDialog(
+    showRestoreDialog: Boolean,
+    storageVolumes: List<Pair<File, Boolean>>,
+    storageManager: StorageManager?,
+    context: Context,
+    onRestoreRequested: () -> Unit,
+    onDismiss: () -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (!showRestoreDialog) return
+
+    val colors = MaterialTheme.customColorScheme
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = modifier,
+        title = { Text("Restore from External Storage", color = colors.AppText) },
+        text = {
+            Text(
+                "No removable storage detected. Please insert a USB drive and press 'Retry'.",
+                color = colors.AppText
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onRetry) {
+                Text("Retry", color = colors.CardTotp)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = colors.CardTotp)
+            }
+        }
+    )
+}
+
+@Composable
+fun RestorePasswordDialog(
+    showDialog: Boolean,
+    encryptedData: String?,
+    viewModel: MainViewModel,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (!showDialog || encryptedData == null) return
+
+    var password by remember { mutableStateOf("") }
+    var passwordError by remember { mutableStateOf<String?>("Password must be at least 8 characters") }
+    val colors = MaterialTheme.customColorScheme
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(password) {
+        val trimmedPassword = password.trim()
+        passwordError = if (trimmedPassword.length < 8) "Password must be at least 8 characters" else null
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = modifier,
+        title = { Text("Enter Decryption Password", color = colors.AppText) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Decryption Password (min 8 chars)", color = colors.AppText) },
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = passwordError != null,
+                    supportingText = { Text(passwordError ?: " ", color = if (passwordError != null) MaterialTheme.colorScheme.error else colors.AppText) }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val trimmedPassword = password.trim()
+                    if (trimmedPassword.length >= 8) {
+                        viewModel.importSeedsCrypt(encryptedData, password)?.let { count ->
+                            coroutineScope.launch {
+                                viewModel.dispatch(AuthCommand.SetError("Restored $count entries"))
+                                delay(ERROR_DISPLAY_DURATION_MS)
+                                viewModel.dispatch(AuthCommand.SetError(null))
+                            }
+                        } ?: run {
+                            coroutineScope.launch {
+                                viewModel.dispatch(AuthCommand.SetError("Restore failed: Invalid password or data"))
+                                delay(ERROR_DISPLAY_DURATION_MS)
+                                viewModel.dispatch(AuthCommand.SetError(null))
+                            }
+                        }
+                        onDismiss()
+                    }
+                },
+                enabled = password.trim().length >= 8
+            ) {
+                Text("Decrypt", color = colors.CardTotp)
             }
         },
         dismissButton = {
