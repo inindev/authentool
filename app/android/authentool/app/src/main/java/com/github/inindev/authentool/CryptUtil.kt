@@ -69,12 +69,15 @@ object CryptUtil {
      */
     fun decrypt(base64Encrypted: String, password: String): String {
         try {
+            // sanitize input by removing leading/trailing whitespace and newlines
+            val sanitizedBase64 = base64Encrypted.trim()
+
             // ensure proper base64 padding
-            val base64Normalized = if (base64Encrypted.length % 4 == 0) {
-                base64Encrypted
+            val base64Normalized = if (sanitizedBase64.length % 4 == 0) {
+                sanitizedBase64
             } else {
-                val missingPadding = 4 - (base64Encrypted.length % 4)
-                base64Encrypted + "=".repeat(missingPadding)
+                val missingPadding = 4 - (sanitizedBase64.length % 4)
+                sanitizedBase64 + "=".repeat(missingPadding)
             }
 
             val encryptedBytes = decoder.decode(base64Normalized)

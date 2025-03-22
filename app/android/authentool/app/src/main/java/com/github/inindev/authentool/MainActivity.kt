@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.getSystemService
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.produceState
 import androidx.core.net.toUri
@@ -785,6 +786,7 @@ fun RestoreSeedsDialog(
 
     var password by remember { mutableStateOf("") }
     var passwordError by remember { mutableStateOf<String?>("Password must be at least 8 characters") }
+    var mergeChecked by remember { mutableStateOf(false) }  // default to replace
     val colors = MaterialTheme.customColorScheme
     val coroutineScope = rememberCoroutineScope()
 
@@ -812,6 +814,26 @@ fun RestoreSeedsDialog(
                         imeAction = ImeAction.Done
                     )
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Checkbox(
+                        checked = mergeChecked,
+                        onCheckedChange = { mergeChecked = it },
+                        colors = androidx.compose.material3.CheckboxDefaults.colors(
+                            checkedColor = colors.CardTotp,
+                            uncheckedColor = colors.AppText
+                        )
+                    )
+                    Text(
+                        text = "Merge with existing entries",
+                        color = colors.AppText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
             }
         },
         confirmButton = {
@@ -819,7 +841,7 @@ fun RestoreSeedsDialog(
                 onClick = {
                     val trimmedPassword = password.trim()
                     if (trimmedPassword.length >= 8) {
-                        viewModel.importSeedsCrypt(encryptedData, password)?.let { count ->
+                        viewModel.importSeedsCrypt(encryptedData, password, merge = mergeChecked)?.let { count ->
                             onSuccess(count)
                             coroutineScope.launch {
                                 viewModel.dispatch(AuthCommand.SetError("Restored $count entries"))

@@ -192,13 +192,15 @@ class MainViewModel(private val context: Context) : ViewModel() {
             val loadedPairs = try {
                 Json.decodeFromString<List<Pair<String, String>>>(json)
             } catch (_: Exception) {
-                Json.decodeFromString<List<ExportEntry>>(json).map { it.name to it.seed }
+                Json.decodeFromString<List<ExportEntry>>(json).map { entry -> entry.name to entry.seed }
             }
-            _uiState.update {
-                it.copy(codes = loadedPairs.map { AuthCard("${it.first}-${it.second.hashCode()}", it.first, it.second) })
+            _uiState.update { state ->
+                state.copy(codes = loadedPairs.map { pair ->
+                    AuthCard("${pair.first}-${pair.second.hashCode()}", pair.first, pair.second)
+                })
             }
         } catch (e: Exception) {
-            _uiState.update { it.copy(errorMessage = "Failed to load saved codes.") }
+            _uiState.update { state -> state.copy(errorMessage = "Failed to load saved codes.") }
         }
     }
 
@@ -231,17 +233,22 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
-    fun importSeedsCrypt(encryptedData: String, password: String): Int? {
+    fun importSeedsCrypt(encryptedData: String, password: String, merge: Boolean): Int? {
         return try {
             val json = encryptedData.decrypt(password)
             val entries = Json.decodeFromString<List<ExportEntry>>(json)
             val newCards = entries.map { AuthCard(name = it.name, seed = it.seed) }
             viewModelScope.launch {
                 _uiState.update { current ->
-                    val uniqueCards = newCards.filter { newCard ->
-                        current.codes.none { it.name == newCard.name && it.seed == newCard.seed }
+                    val updatedCodes = if (merge) {
+                        val uniqueCards = newCards.filter { newCard ->
+                            current.codes.none { it.name == newCard.name && it.seed == newCard.seed }
+                        }
+                        current.codes + uniqueCards
+                    } else {
+                        newCards
                     }
-                    current.copy(codes = current.codes + uniqueCards)
+                    current.copy(codes = updatedCodes)
                 }
                 saveCodes(_uiState.value.codes)
             }
