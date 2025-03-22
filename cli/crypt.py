@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 #
+# A command-line tool for AES-GCM encryption/decryption
+#
 # Copyright (c) 2025, John Clark <inindev@gmail.com>
 #
 # Licensed under the Apache License. See LICENSE file in the project root for full license information.
@@ -13,7 +15,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 import os
 import getpass
-import stat
+
 
 SALT_SIZE = 16        # 16-byte salt
 IV_SIZE = 12          # 12-byte IV for AES-GCM
@@ -110,21 +112,16 @@ def main():
         print("\nIf no string is provided as an argument, input will be read from stdin.\n")
         sys.exit(1)
 
-    mode = sys.argv[1]
-
-    # check if stdin has data (is piped or redirected)
-    input_from_stdin = not sys.stdin.isatty()
-
-    # get input either from stdin or command line
-    if input_from_stdin:
-        input_data = sys.stdin.read().strip()
-    elif len(sys.argv) == 3:
+    if len(sys.argv) > 2:
         input_data = sys.argv[2]
+    elif not sys.stdin.isatty():
+        input_data = sys.stdin.read().strip()
     else:
         print("Error: No input provided (use argument or pipe data to stdin)", file=sys.stderr)
         sys.exit(1)
 
     try:
+        mode = sys.argv[1]
         if mode == "encrypt":
             password = get_verified_password()  # get password with verification
             encrypted = encrypt(input_data, password)
