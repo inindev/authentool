@@ -96,8 +96,9 @@ fun AuthenticatorCard(
 
     // save name when exiting edit mode
     LaunchedEffect(state.isEditing) {
-        if (!state.isEditing && editedName.isNotBlank() && editedName != card.name) {
-            viewModel.dispatch(AuthCommand.RenameCard(card.id, editedName))
+        val trimmedName = editedName.trim()
+        if (!state.isEditing && trimmedName.isNotBlank() && trimmedName != card.name) {
+            viewModel.dispatch(AuthCommand.RenameCard(card.id, trimmedName))
         }
     }
 

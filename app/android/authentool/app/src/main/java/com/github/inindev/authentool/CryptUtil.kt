@@ -69,7 +69,15 @@ object CryptUtil {
      */
     fun decrypt(base64Encrypted: String, password: String): String {
         try {
-            val encryptedBytes = decoder.decode(base64Encrypted)
+            // ensure proper base64 padding
+            val base64Normalized = if (base64Encrypted.length % 4 == 0) {
+                base64Encrypted
+            } else {
+                val missingPadding = 4 - (base64Encrypted.length % 4)
+                base64Encrypted + "=".repeat(missingPadding)
+            }
+
+            val encryptedBytes = decoder.decode(base64Normalized)
             if (encryptedBytes.size < (1 + SALT_SIZE + IV_SIZE)) {
                 throw CryptException("Encrypted data is too short")
             }

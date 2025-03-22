@@ -25,15 +25,21 @@ class TotpGenerator(
          * @return The decoded byte array.
          */
         fun decodeBase32(base32: String): ByteArray {
-            val cleaned = base32.uppercase().filter { it in ALPHABET }
-            if (cleaned.isEmpty()) throw IllegalArgumentException("Base32 string is empty after cleaning")
-            val bits = cleaned.map { ALPHABET.indexOf(it).toString(2).padStart(5, '0') }.joinToString("")
-            val byteLength = bits.length / 8
-            if (bits.length % 8 != 0) throw IllegalArgumentException("Base32 string length (${cleaned.length}) must encode to whole bytes")
-            val bytes = (0 until byteLength).map {
-                bits.substring(it * 8, (it + 1) * 8).toInt(2).toByte()
+            val base32Filtered = base32.uppercase().filter { it in ALPHABET }
+            if (base32Filtered.isEmpty()) throw IllegalArgumentException("Base32 string is empty after cleaning")
+            val validLengths = setOf(2, 4, 5, 7) + (8..base32Filtered.length step 8).toSet()
+            if (base32Filtered.length !in validLengths) {
+                throw IllegalArgumentException(
+                    "Base32 string length (${base32Filtered.length}) is invalid. " +
+                            "Expected lengths: 2, 4, 5, 7, or multiples of 8."
+                )
             }
-            return bytes.toByteArray()
+            val bits = base32Filtered.map { ALPHABET.indexOf(it).toString(2).padStart(5, '0') }.joinToString("")
+            val byteLength = (base32Filtered.length * 5) / 8
+            val usableBits = bits.take(byteLength * 8)
+            return (0 until byteLength).map {
+                usableBits.substring(it * 8, (it + 1) * 8).toInt(2).toByte()
+            }.toByteArray()
         }
     }
 

@@ -540,12 +540,14 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                     Spacer(modifier = Modifier.width(8.dp))
                     TextButton(
                         onClick = {
+                            val trimmedName = name.trim()
+                            val trimmedSeed = seed.trim()
                             when {
-                                name.isBlank() -> errorMessage = "Name cannot be empty."
-                                seed.isBlank() -> errorMessage = "Seed cannot be empty."
-                                !isValidBase32(seed) -> errorMessage = "Seed must be valid Base32 (A-Z, 2-7)."
+                                trimmedName.isBlank() -> errorMessage = "Name cannot be empty."
+                                trimmedSeed.isBlank() -> errorMessage = "Seed cannot be empty."
+                                !isValidBase32(trimmedSeed) -> errorMessage = "Seed must be valid Base32 (A-Z, 2-7)."
                                 else -> {
-                                    onAdd(name, seed)
+                                    onAdd(trimmedName, trimmedSeed)
                                     errorMessage = null
                                 }
                             }
@@ -924,8 +926,7 @@ private fun launchMediaManagerForUnmount(activity: MainActivity, viewModel: Main
 
 private fun isValidBase32(seed: String): Boolean {
     val alphabet = TotpGenerator.ALPHABET
-    val cleanedSeed = seed.uppercase().filter { it != '=' }
-    return cleanedSeed.isNotEmpty() &&
-            cleanedSeed.all { it in alphabet } &&
-            (cleanedSeed.length % 8 == 0 || cleanedSeed.length % 8 in listOf(2, 4, 5, 7))
+    val cleanedSeed = seed.uppercase().filter { it in alphabet }
+    val validLengths = setOf(2, 4, 5, 7) + (8..cleanedSeed.length step 8).toSet()
+    return cleanedSeed.isNotEmpty() && cleanedSeed.length in validLengths
 }
