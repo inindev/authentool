@@ -12,7 +12,8 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 import os
-import getpass  # Added for secure password input
+import getpass
+import stat
 
 SALT_SIZE = 16        # 16-byte salt
 IV_SIZE = 12          # 12-byte IV for AES-GCM
@@ -104,20 +105,33 @@ def get_verified_password() -> str:
         print("Passwords do not match. Please try again.", file=sys.stderr)
 
 def main():
-    if len(sys.argv) != 3:
-        print(f"\nUsage: {sys.argv[0]} {{encrypt|decrypt}} <string>\n")
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print(f"\nUsage: {sys.argv[0]} {{encrypt|decrypt}} [<string>]")
+        print("\nIf no string is provided as an argument, input will be read from stdin.\n")
         sys.exit(1)
 
-    mode, input_string = sys.argv[1], sys.argv[2]
+    mode = sys.argv[1]
+
+    # check if stdin has data (is piped or redirected)
+    input_from_stdin = not sys.stdin.isatty()
+
+    # get input either from stdin or command line
+    if input_from_stdin:
+        input_data = sys.stdin.read().strip()
+    elif len(sys.argv) == 3:
+        input_data = sys.argv[2]
+    else:
+        print("Error: No input provided (use argument or pipe data to stdin)", file=sys.stderr)
+        sys.exit(1)
 
     try:
         if mode == "encrypt":
             password = get_verified_password()  # get password with verification
-            encrypted = encrypt(input_string, password)
+            encrypted = encrypt(input_data, password)
             print(encrypted)
         elif mode == "decrypt":
             password = getpass.getpass("Enter password: ")  # single prompt for decrypt
-            decrypted = decrypt(input_string, password)
+            decrypted = decrypt(input_data, password)
             print(decrypted)
         else:
             print("Invalid mode. Use 'encrypt' or 'decrypt'.")
