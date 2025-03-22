@@ -105,7 +105,9 @@ class MainViewModel(private val context: Context) : ViewModel() {
             } else state
         }
         is AuthCommand.DeleteCard -> {
-            state.copy(codes = state.codes.filter { it.id != command.cardId })
+            val newCodes = state.codes.filter { it.id != command.cardId }
+            val newEditingCardId = if (state.editingCardId == command.cardId) null else state.editingCardId
+            state.copy(codes = newCodes, editingCardId = newEditingCardId)
         }
         is AuthCommand.MoveCard -> {
             val index = state.codes.indexOfFirst { it.id == command.cardId }
