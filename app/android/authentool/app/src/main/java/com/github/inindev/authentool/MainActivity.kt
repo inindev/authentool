@@ -519,7 +519,7 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
-                        keyboardType = KeyboardType.Ascii,
+                        keyboardType = KeyboardType.Password,
                         imeAction = ImeAction.Done
                     )
                 )
@@ -680,7 +680,7 @@ fun BackupDialog(
                     supportingText = { Text(passwordError ?: " ", color = if (passwordError != null) MaterialTheme.colorScheme.error else colors.AppText) },
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
-                        keyboardType = KeyboardType.Text,
+                        keyboardType = KeyboardType.Password,
                         imeAction = ImeAction.Done
                     )
                 )
@@ -806,7 +806,7 @@ fun RestoreSeedsDialog(
                     supportingText = { Text(passwordError ?: " ", color = if (passwordError != null) MaterialTheme.colorScheme.error else colors.AppText) },
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
-                        keyboardType = KeyboardType.Text,
+                        keyboardType = KeyboardType.Password,
                         imeAction = ImeAction.Done
                     )
                 )
