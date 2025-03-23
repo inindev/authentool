@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 #
-# A command-line tool for AES-GCM encryption/decryption
+# command-line tool for AES-GCM encryption/decryption
 #
 # Copyright (c) 2025, John Clark <inindev@gmail.com>
-#
 # Licensed under the Apache License. See LICENSE file in the project root for full license information.
 #
 
