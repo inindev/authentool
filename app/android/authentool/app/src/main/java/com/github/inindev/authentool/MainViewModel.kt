@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
@@ -221,10 +222,6 @@ class MainViewModel(private val context: Context) : ViewModel() {
     private data class ExportEntry(val name: String, val seed: String)
 
     fun exportSeedsCrypt(password: String): String? {
-        val preferences = prefs ?: run {
-            _uiState.update { it.copy(errorMessage = "Storage unavailable.") }
-            return null
-        }
         return try {
             val codes = _uiState.value.codes.map { ExportEntry(it.name, it.seed) }
             val json = Json.encodeToString(codes)
@@ -235,10 +232,19 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
+    @OptIn(ExperimentalSerializationApi::class)
     fun importSeedsCrypt(encryptedData: String, password: String, merge: Boolean): Int? {
+        // lenient json parser for importing user-provided backups
+        val json = Json {
+            allowTrailingComma = true      // permits trailing commas in arrays/objects
+            ignoreUnknownKeys = true       // ignores unrecognized fields
+            isLenient = true               // allows non-strict parsing (e.g., unquoted keys)
+            coerceInputValues = true       // coerces invalid values to defaults
+        }
+
         return try {
-            val json = encryptedData.decrypt(password)
-            val entries = Json.decodeFromString<List<ExportEntry>>(json)
+            val jsonString = encryptedData.decrypt(password)
+            val entries = json.decodeFromString<List<ExportEntry>>(jsonString)
             val newCards = entries.map { AuthCard(name = it.name, seed = it.seed) }
             viewModelScope.launch {
                 _uiState.update { current ->
@@ -271,7 +277,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
                 val epoch = timeInSeconds / TotpGenerator.TIME_STEP
                 val timeInPeriod = now % (TotpGenerator.TIME_STEP * 1000)
                 val denominator = TotpGenerator.TIME_STEP * 1000f
-                val progress = if (denominator > 0f) 1f - (timeInPeriod / denominator) else 1f
+                val progress = 1f - (timeInPeriod / denominator)
 
                 _countdownProgress.value = progress
 
