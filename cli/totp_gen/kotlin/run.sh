@@ -6,8 +6,8 @@
 
 set -e
 
-SOURCE="CodeGenerator.kt"
-JAR="CodeGenerator.jar"
+SOURCE="TotpGen.kt"
+JAR="TotpGen.jar"
 
 # check if jar exists and is newer than or equal to the source file
 if [ -f "$JAR" ] && [ "$SOURCE" -ot "$JAR" ] || [ "$SOURCE" -nt "$JAR" ] && [ "$SOURCE" -ot "$JAR" ]; then
