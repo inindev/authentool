@@ -67,6 +67,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.produceState
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.inindev.authentool.ui.theme.AppColorTheme
@@ -521,6 +522,7 @@ fun AddEntryDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
                         keyboardType = KeyboardType.Password,
+                        capitalization = KeyboardCapitalization.Characters,
                         imeAction = ImeAction.Done
                     )
                 )
