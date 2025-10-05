@@ -21,3 +21,5 @@ replay_pid*
 .kotlin/
 
 release
+
+**/.DS_Store
