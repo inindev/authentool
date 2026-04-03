@@ -69,7 +69,11 @@ data class AuthCardUiState(
     val isEditing: Boolean = false,
     val isHighlighted: Boolean = false,
     val position: GridPosition = GridPosition(0, 0, 0)
-)
+) {
+    fun formattedTotpCode(): String = if (totpCode.length == 6) {
+        "${totpCode.substring(0, 3)}\u205F${totpCode.substring(3)}"
+    } else totpCode
+}
 
 @Immutable
 data class GridPosition(val index: Int, val row: Int, val column: Int) {
@@ -115,7 +119,7 @@ fun AuthenticatorCard(
                     onTap = {
                         if (!state.isEditing) {
                             viewModel.dispatch(AuthCommand.HighlightCard(card.id))
-                            clipboardManager.setText(AnnotatedString(card.generateTotpCode()))
+                            clipboardManager.setText(AnnotatedString(state.totpCode))
                         }
                     },
                     onLongPress = {
@@ -163,7 +167,7 @@ fun AuthenticatorCard(
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = card.formattedTotpCode(),
+                text = state.formattedTotpCode(),
                 color = if (state.isHighlighted) colors.highlightTotp else colors.totp,
                 style = MaterialTheme.typography.displayLarge
             )

@@ -134,19 +134,11 @@ class MainViewModel(private val context: Context) : ViewModel() {
         val toIndex = calculateNewIndex(index, direction, state.codes.size, columns)
         return if (toIndex != null) {
             val newCodes = state.codes.toMutableList().apply {
-                val fromCard = this[index]
-                val toCard = this[toIndex]
-                // swap without regenerating the moved card’s id
-                this[index] = toCard.copy(id = java.util.UUID.randomUUID().toString()) // new id for the displaced card
-                this[toIndex] = fromCard // keep original id for the moved card
+                val tmp = this[index]
+                this[index] = this[toIndex]
+                this[toIndex] = tmp
             }
-            // if the moved card was being edited, keep it in edit mode
-            val newEditingCardId = if (state.editingCardId == state.codes[index].id) {
-                state.codes[index].id // use the original id, now at toIndex
-            } else {
-                state.editingCardId
-            }
-            state.copy(codes = newCodes, editingCardId = newEditingCardId)
+            state.copy(codes = newCodes)
         } else state
     }
 

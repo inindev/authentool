@@ -89,7 +89,7 @@ private enum class CountdownLocation {
     BOTTOM,
     BOTH
 }
-private val countdown_location = CountdownLocation.BOTH
+private val countdownLocation = CountdownLocation.BOTH
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -357,7 +357,7 @@ fun AuthGrid(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (countdown_location == CountdownLocation.TOP || countdown_location == CountdownLocation.BOTH) {
+        if (countdownLocation == CountdownLocation.TOP || countdownLocation == CountdownLocation.BOTH) {
             LinearProgressIndicator(
                 progress = { animatedProgress },
                 modifier = Modifier.fillMaxWidth().height(8.dp),
@@ -475,7 +475,7 @@ fun AuthGrid(
                 )
             }
         }
-        if (countdown_location == CountdownLocation.BOTTOM || countdown_location == CountdownLocation.BOTH) {
+        if (countdownLocation == CountdownLocation.BOTTOM || countdownLocation == CountdownLocation.BOTH) {
             LinearProgressIndicator(
                 progress = { animatedProgress },
                 modifier = Modifier.fillMaxWidth().height(8.dp),
