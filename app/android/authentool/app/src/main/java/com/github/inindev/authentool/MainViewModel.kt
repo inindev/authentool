@@ -1,9 +1,8 @@
 package com.github.inindev.authentool
 
-import android.annotation.SuppressLint
-import android.content.Context
+import android.app.Application
 import androidx.core.content.edit
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -42,8 +41,7 @@ sealed class AuthCommand {
     data class SetError(val message: String?) : AuthCommand()
 }
 
-@SuppressLint("StaticFieldLeak")
-class MainViewModel(private val context: Context) : ViewModel() {
+class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
@@ -51,14 +49,19 @@ class MainViewModel(private val context: Context) : ViewModel() {
     val countdownProgress: StateFlow<Float> = _countdownProgress.asStateFlow()
 
     private var countdownJob: Job? = null
+    private val generatorCache = mutableMapOf<String, TotpGenerator>()
+
+    private fun getGenerator(seed: String): TotpGenerator =
+        generatorCache.getOrPut(seed) { TotpGenerator(TotpGenerator.decodeBase32(seed)) }
 
     private val prefs by lazy {
+        val app = getApplication<Application>()
         try {
-            val masterKey = MasterKey.Builder(context)
+            val masterKey = MasterKey.Builder(app)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
             EncryptedSharedPreferences.create(
-                context,
+                app,
                 "authentool_prefs",
                 masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
@@ -83,6 +86,9 @@ class MainViewModel(private val context: Context) : ViewModel() {
             _uiState.value = newState
             if (shouldPersist(command)) {
                 saveCodes(newState.codes)
+            }
+            if (command is AuthCommand.AddCard) {
+                _uiState.update { it.copy(totpCodes = it.codes.map { card -> getGenerator(card.seed).generateCode() }) }
             }
         }
     }
@@ -274,7 +280,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
                 _countdownProgress.value = progress
 
                 if (epoch != lastEpoch) {
-                    val currentCodes = _uiState.value.codes.map { it.generateTotpCode() }
+                    val currentCodes = _uiState.value.codes.map { getGenerator(it.seed).generateCode() }
                     _uiState.update { it.copy(totpCodes = currentCodes) }
                     lastEpoch = epoch
                 }
@@ -285,19 +291,10 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     override fun onCleared() {
         countdownJob?.cancel()
+        generatorCache.clear()
         super.onCleared()
     }
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 enum class ThemeMode { SYSTEM, DAY, NIGHT }
-
-class MainViewModelFactory(private val context: Context) : androidx.lifecycle.ViewModelProvider.Factory {
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return MainViewModel(context) as T
-        }
-        throw IllegalArgumentException("Unknown ViewModel class")
-    }
-}

@@ -45,7 +45,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.github.inindev.authentool.ui.theme.customColorScheme
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.Transient
 import java.util.UUID
 
 @Stable
@@ -54,13 +53,7 @@ data class AuthCard(
     @Transient val id: String = UUID.randomUUID().toString(),
     val name: String,
     val seed: String,
-    @Transient val generator: TotpGenerator = TotpGenerator(TotpGenerator.decodeBase32(seed))
-) {
-    fun generateTotpCode(): String = generator.generateCode()
-    fun formattedTotpCode(): String = generateTotpCode().let { code ->
-        if (code.length == 6) "${code.substring(0, 3)}\u205F${code.substring(3)}" else code
-    }
-}
+)
 
 @Immutable
 data class AuthCardUiState(
@@ -89,7 +82,7 @@ data class GridPosition(val index: Int, val row: Int, val column: Int) {
 @Composable
 fun AuthenticatorCard(
     state: AuthCardUiState,
-    viewModel: MainViewModel,
+    onDispatch: (AuthCommand) -> Unit,
     modifier: Modifier = Modifier,
     colors: AuthCardColors = AuthCardColors.default()
 ) {
@@ -102,12 +95,12 @@ fun AuthenticatorCard(
     LaunchedEffect(state.isEditing) {
         val trimmedName = editedName.trim()
         if (!state.isEditing && trimmedName.isNotBlank() && trimmedName != card.name) {
-            viewModel.dispatch(AuthCommand.RenameCard(card.id, trimmedName))
+            onDispatch(AuthCommand.RenameCard(card.id, trimmedName))
         }
     }
 
     BackHandler(enabled = state.isEditing) {
-        viewModel.dispatch(AuthCommand.StopEditing(card.id))
+        onDispatch(AuthCommand.StopEditing(card.id))
     }
 
     Card(
@@ -118,14 +111,14 @@ fun AuthenticatorCard(
                 detectTapGestures(
                     onTap = {
                         if (!state.isEditing) {
-                            viewModel.dispatch(AuthCommand.HighlightCard(card.id))
+                            onDispatch(AuthCommand.HighlightCard(card.id))
                             clipboardManager.setText(AnnotatedString(state.totpCode))
                         }
                     },
                     onLongPress = {
                         if (!state.isEditing) {
                             println("long-press on card.id: ${card.id}")
-                            viewModel.dispatch(AuthCommand.StartEditing(card.id))
+                            onDispatch(AuthCommand.StartEditing(card.id))
                         }
                     }
                 )
@@ -175,16 +168,16 @@ fun AuthenticatorCard(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     MoveButton(Icons.Default.ArrowUpward, "move up", colors.text, state.position.canMove(Direction.UP, Int.MAX_VALUE, 2)) {
-                        viewModel.dispatch(AuthCommand.MoveCard(card.id, Direction.UP))
+                        onDispatch(AuthCommand.MoveCard(card.id, Direction.UP))
                     }
                     MoveButton(Icons.AutoMirrored.Filled.ArrowBack, "move left", colors.text, state.position.canMove(Direction.LEFT, Int.MAX_VALUE, 2)) {
-                        viewModel.dispatch(AuthCommand.MoveCard(card.id, Direction.LEFT))
+                        onDispatch(AuthCommand.MoveCard(card.id, Direction.LEFT))
                     }
                     MoveButton(Icons.AutoMirrored.Filled.ArrowForward, "move right", colors.text, state.position.canMove(Direction.RIGHT, Int.MAX_VALUE, 2)) {
-                        viewModel.dispatch(AuthCommand.MoveCard(card.id, Direction.RIGHT))
+                        onDispatch(AuthCommand.MoveCard(card.id, Direction.RIGHT))
                     }
                     MoveButton(Icons.Default.ArrowDownward, "move down", colors.text, state.position.canMove(Direction.DOWN, Int.MAX_VALUE, 2)) {
-                        viewModel.dispatch(AuthCommand.MoveCard(card.id, Direction.DOWN))
+                        onDispatch(AuthCommand.MoveCard(card.id, Direction.DOWN))
                     }
                 }
             }
@@ -198,7 +191,7 @@ fun AuthenticatorCard(
             text = { Text("Are you sure you want to delete ${card.name}?", color = MaterialTheme.customColorScheme.AppText, style = MaterialTheme.typography.bodyLarge) },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.dispatch(AuthCommand.DeleteCard(card.id))
+                    onDispatch(AuthCommand.DeleteCard(card.id))
                     showDeleteDialog = false
                 }) {
                     Text("delete", color = MaterialTheme.customColorScheme.CardTotp, style = MaterialTheme.typography.labelLarge)

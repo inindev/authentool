@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val viewModel = viewModel<MainViewModel>(factory = MainViewModelFactory(applicationContext))
+            val viewModel = viewModel<MainViewModel>()
             MainActivityContent(viewModel = viewModel, activity = this)
         }
     }
@@ -273,7 +273,7 @@ fun AuthGrid(
                         items = cardStates,
                         key = { _, state -> state.card.id }
                     ) { _, state ->
-                        AuthenticatorCard(state = state, viewModel = viewModel)
+                        AuthenticatorCard(state = state, onDispatch = viewModel::dispatch)
                     }
                 }
                 SystemMenu(
@@ -310,7 +310,8 @@ fun AuthGrid(
                 RestoreSeedsDialog(
                     showDialog = backupRestore.showRestoreSeedsDialog,
                     encryptedData = backupRestore.encryptedData,
-                    viewModel = viewModel,
+                    onImport = viewModel::importSeedsCrypt,
+                    onDispatch = viewModel::dispatch,
                     onDismiss = { backupRestore.dismissRestoreSeedsDialog() },
                     onSuccess = { count -> backupRestore.onRestoreSuccess(count) }
                 )
@@ -626,7 +627,8 @@ fun RestoreStorageCheckDialog(
 fun RestoreSeedsDialog(
     showDialog: Boolean,
     encryptedData: String?,
-    viewModel: MainViewModel,
+    onImport: (encryptedData: String, password: String, merge: Boolean) -> Int?,
+    onDispatch: (AuthCommand) -> Unit,
     onDismiss: () -> Unit,
     onSuccess: (Int) -> Unit,
     modifier: Modifier = Modifier
@@ -690,18 +692,18 @@ fun RestoreSeedsDialog(
                 onClick = {
                     val trimmedPassword = password.trim()
                     if (trimmedPassword.length >= 8) {
-                        viewModel.importSeedsCrypt(encryptedData, password, merge = mergeChecked)?.let { count ->
+                        onImport(encryptedData, password, mergeChecked)?.let { count ->
                             onSuccess(count)
                             coroutineScope.launch {
-                                viewModel.dispatch(AuthCommand.SetError("Restored $count entries"))
+                                onDispatch(AuthCommand.SetError("Restored $count entries"))
                                 delay(ERROR_DISPLAY_DURATION_MS)
-                                viewModel.dispatch(AuthCommand.SetError(null))
+                                onDispatch(AuthCommand.SetError(null))
                             }
                         } ?: run {
                             coroutineScope.launch {
-                                viewModel.dispatch(AuthCommand.SetError("Restore failed: Invalid password or data"))
+                                onDispatch(AuthCommand.SetError("Restore failed: Invalid password or data"))
                                 delay(ERROR_DISPLAY_DURATION_MS)
-                                viewModel.dispatch(AuthCommand.SetError(null))
+                                onDispatch(AuthCommand.SetError(null))
                             }
                         }
                         onDismiss()
