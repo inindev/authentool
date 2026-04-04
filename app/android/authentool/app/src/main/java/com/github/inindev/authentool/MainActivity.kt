@@ -4,12 +4,10 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.storage.StorageManager
-import android.provider.DocumentsContract
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -26,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,6 +45,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,30 +57,23 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.getSystemService
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.material3.Checkbox
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.produceState
-import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.inindev.authentool.ui.theme.AppColorTheme
 import com.github.inindev.authentool.ui.theme.customColorScheme
-import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 
 const val HIGHLIGHT_DELAY_MS = 8000L
 private const val ERROR_DISPLAY_DURATION_MS = 3000L
 private const val ANIMATION_DURATION_MS = 100
-private const val DATE_FORMAT = "yyyyMMdd"
-private const val APP_NAME = "authentool"
 
 // countdown bar placement
 private enum class CountdownLocation {
@@ -207,141 +200,21 @@ fun AuthGrid(
     val codes = uiState.codes
     val totpCodes = uiState.totpCodes
     val colorScheme = MaterialTheme.customColorScheme
-    val context = LocalContext.current
-    val storageManager = context.getSystemService<StorageManager>()
-    val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
     val columns = 2
 
-    // generate filename with current date
-    val fileName by produceState(initialValue = "authentool_backup.enc") {
-        val date = java.text.SimpleDateFormat(DATE_FORMAT, java.util.Locale.US)
-            .format(java.util.Date())
-        value = "${APP_NAME}_${date}.enc"
-    }
+    val backupRestore = rememberBackupRestoreManager(viewModel)
+    val saveFileLauncher = rememberSaveFileLauncher(backupRestore)
+    val restoreFileLauncher = rememberRestoreFileLauncher(backupRestore)
 
     var showSystemMenu by remember { mutableStateOf(false) }
     var menuOffset by remember { mutableStateOf(DpOffset(0.dp, 0.dp)) }
     var showThemeSubmenu by remember { mutableStateOf(false) }
-    var showBackupDialog by remember { mutableStateOf(false) }
-    var showRestoreStorageCheckDialog by remember { mutableStateOf(false) }
-    var showRestoreSeedsDialog by remember { mutableStateOf(false) }
-    var showOperationSuccessDialog by remember { mutableStateOf(false) }
-    var operationSuccessMessage by remember { mutableStateOf("") }
-    var encryptedData by remember { mutableStateOf<String?>(null) }
-    var storageVolumes by remember { mutableStateOf(emptyList<Pair<File, Boolean>>()) }
-    var backupPassword by remember { mutableStateOf("") }
 
-    // custom contract to set initial uri to removable storage only for backup
-    val saveFileLauncher = rememberLauncherForActivityResult(
-        object : ActivityResultContracts.CreateDocument("application/octet-stream") {
-            override fun createIntent(context: Context, input: String): Intent {
-                val intent = super.createIntent(context, input)
-                val removableVolumes = storageVolumes.filter { it.second }
-                if (removableVolumes.isEmpty()) {
-                    Log.w("MainActivity", "No removable volumes detected - backup aborted")
-                    coroutineScope.launch {
-                        viewModel.dispatch(AuthCommand.SetError("No removable storage detected"))
-                        delay(ERROR_DISPLAY_DURATION_MS)
-                        viewModel.dispatch(AuthCommand.SetError(null))
-                    }
-                } else {
-                    val usbVolume = storageManager?.storageVolumes?.find { vol ->
-                        vol.isRemovable && vol.directory != null && removableVolumes.any { it.first == vol.directory }
-                    }
-                    usbVolume?.uuid?.let { uuid ->
-                        val usbUri = "content://com.android.externalstorage.documents/document/$uuid%3A".toUri()
-                        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, usbUri)
-                        Log.d("MainActivity", "Set initial URI to USB for backup: $usbUri")
-                    } ?: Log.w("MainActivity", "No valid removable USB volume found")
-                }
-                return intent
-            }
-        }
-    ) { uri ->
-        uri?.let { saveUri ->
-            viewModel.exportSeedsCrypt(backupPassword)?.let { seedsJson ->
-                context.contentResolver.openOutputStream(saveUri)?.use { outputStream ->
-                    outputStream.write(seedsJson.toByteArray(Charsets.UTF_8))
-                } ?: Log.e("MainActivity", "AuthGrid: Failed to open output stream for uri $saveUri")
-                context.contentResolver.releasePersistableUriPermission(saveUri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                coroutineScope.launch {
-                    viewModel.dispatch(AuthCommand.SetError("Backup saved to USB"))
-                    delay(ERROR_DISPLAY_DURATION_MS)
-                    viewModel.dispatch(AuthCommand.SetError(null))
-                }
-                operationSuccessMessage = "Backup successful"
-                showOperationSuccessDialog = true
-            }
-            showBackupDialog = false
-            backupPassword = "" // clear password after use
-        } ?: run {
-            coroutineScope.launch {
-                viewModel.dispatch(AuthCommand.SetError("Failed to save backup"))
-                delay(ERROR_DISPLAY_DURATION_MS)
-                viewModel.dispatch(AuthCommand.SetError(null))
-            }
-        }
-    }
-
-    // custom contract for restore from removable storage only
-    val restoreFileLauncher = rememberLauncherForActivityResult(
-        object : ActivityResultContracts.OpenDocument() {
-            override fun createIntent(context: Context, input: Array<String>): Intent {
-                val intent = super.createIntent(context, input)
-                val removableVolumes = storageVolumes.filter { it.second }
-                if (removableVolumes.isEmpty()) {
-                    Log.w("MainActivity", "No removable volumes detected for restore - restore aborted")
-                    coroutineScope.launch {
-                        viewModel.dispatch(AuthCommand.SetError("No removable storage detected"))
-                        delay(ERROR_DISPLAY_DURATION_MS)
-                        viewModel.dispatch(AuthCommand.SetError(null))
-                    }
-                } else {
-                    val usbVolume = storageManager?.storageVolumes?.find { vol ->
-                        vol.isRemovable && vol.directory != null && removableVolumes.any { it.first == vol.directory }
-                    }
-                    usbVolume?.uuid?.let { uuid ->
-                        val usbUri = "content://com.android.externalstorage.documents/document/$uuid%3A".toUri()
-                        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, usbUri)
-                        Log.d("MainActivity", "Set initial URI to USB for restore: $usbUri")
-                    } ?: Log.w("MainActivity", "No valid removable USB volume found")
-                }
-                return intent
-            }
-        }
-    ) { uri ->
-        uri?.let {
-            context.contentResolver.openInputStream(it)?.use { inputStream ->
-                encryptedData = inputStream.readBytes().toString(Charsets.UTF_8)
-                showRestoreSeedsDialog = true
-            }
-        }
-    }
-
-    // implicit refresh when backup or restore dialog opens
-    LaunchedEffect(showBackupDialog, showRestoreStorageCheckDialog) {
-        if (showBackupDialog || showRestoreStorageCheckDialog) {
-            storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
-                volume.directory?.let { it to volume.isRemovable }
-            } ?: emptyList()
-            Log.d("MainActivity", "Storage volumes updated: ${storageVolumes.map { "${it.first.path} (removable=${it.second})" }}")
-        }
-    }
-
-    BackHandler(enabled = showSystemMenu || showBackupDialog || showRestoreStorageCheckDialog || showRestoreSeedsDialog || showOperationSuccessDialog) {
+    BackHandler(enabled = showSystemMenu || backupRestore.hasActiveDialog) {
         if (showThemeSubmenu) {
             showThemeSubmenu = false
-        } else if (showBackupDialog) {
-            showBackupDialog = false
-        } else if (showRestoreStorageCheckDialog) {
-            showRestoreStorageCheckDialog = false
-        } else if (showRestoreSeedsDialog) {
-            showRestoreSeedsDialog = false
-            encryptedData = null
-        } else if (showOperationSuccessDialog) {
-            showOperationSuccessDialog = false
-        } else {
+        } else if (!backupRestore.handleBackRequested()) {
             showSystemMenu = false
         }
     }
@@ -409,68 +282,42 @@ fun AuthGrid(
                     menuOffset = menuOffset,
                     themeMode = uiState.themeMode,
                     onThemeSelected = { viewModel.dispatch(AuthCommand.SetTheme(it)) },
-                    onBackupRequested = { showBackupDialog = true },
+                    onBackupRequested = {
+                        backupRestore.requestBackup()
+                    },
                     onRestoreRequested = {
-                        storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
-                            volume.directory?.let { it to volume.isRemovable }
-                        } ?: emptyList()
-                        val removableVolumes = storageVolumes.filter { it.second }
-                        if (removableVolumes.isNotEmpty()) {
-                            restoreFileLauncher.launch(arrayOf("application/octet-stream"))
-                        } else {
-                            showRestoreStorageCheckDialog = true
-                        }
+                        backupRestore.requestRestore(restoreFileLauncher)
                     },
                     onDismiss = { showSystemMenu = false; showThemeSubmenu = false },
                     onThemeSubmenuToggle = { showThemeSubmenu = it }
                 )
                 BackupDialog(
-                    showBackupDialog = showBackupDialog && fileName.isNotEmpty(),
-                    storageVolumes = storageVolumes,
-                    storageManager = storageManager,
-                    context = context,
+                    showBackupDialog = backupRestore.showBackupDialog,
+                    storageVolumes = backupRestore.storageVolumes,
+                    storageManager = LocalContext.current.getSystemService<StorageManager>(),
+                    context = LocalContext.current,
                     onSaveRequested = { password ->
-                        backupPassword = password
-                        saveFileLauncher.launch(fileName)
+                        backupRestore.onSaveRequested(password, saveFileLauncher)
                     },
-                    onDismiss = { showBackupDialog = false },
-                    onRetry = {
-                        storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
-                            volume.directory?.let { it to volume.isRemovable }
-                        } ?: emptyList()
-                    }
+                    onDismiss = { backupRestore.dismissBackupDialog() },
+                    onRetry = { backupRestore.refreshStorageVolumes() }
                 )
                 RestoreStorageCheckDialog(
-                    showRestoreStorageCheckDialog = showRestoreStorageCheckDialog,
-                    onDismiss = { showRestoreStorageCheckDialog = false },
-                    onRetry = {
-                        storageVolumes = storageManager?.storageVolumes?.mapNotNull { volume ->
-                            volume.directory?.let { it to volume.isRemovable }
-                        } ?: emptyList()
-                        val removableVolumes = storageVolumes.filter { it.second }
-                        if (removableVolumes.isNotEmpty()) {
-                            restoreFileLauncher.launch(arrayOf("application/octet-stream"))
-                            showRestoreStorageCheckDialog = false
-                        }
-                    }
+                    showRestoreStorageCheckDialog = backupRestore.showRestoreStorageCheckDialog,
+                    onDismiss = { backupRestore.dismissRestoreStorageCheckDialog() },
+                    onRetry = { backupRestore.retryRestore(restoreFileLauncher) }
                 )
                 RestoreSeedsDialog(
-                    showDialog = showRestoreSeedsDialog,
-                    encryptedData = encryptedData,
+                    showDialog = backupRestore.showRestoreSeedsDialog,
+                    encryptedData = backupRestore.encryptedData,
                     viewModel = viewModel,
-                    onDismiss = {
-                        showRestoreSeedsDialog = false
-                        encryptedData = null
-                    },
-                    onSuccess = { count ->
-                        operationSuccessMessage = "Restore successful ($count entries)"
-                        showOperationSuccessDialog = true
-                    }
+                    onDismiss = { backupRestore.dismissRestoreSeedsDialog() },
+                    onSuccess = { count -> backupRestore.onRestoreSuccess(count) }
                 )
                 OperationSuccessDialog(
-                    showDialog = showOperationSuccessDialog,
-                    message = operationSuccessMessage,
-                    onDismiss = { showOperationSuccessDialog = false },
+                    showDialog = backupRestore.showOperationSuccessDialog,
+                    message = backupRestore.operationSuccessMessage,
+                    onDismiss = { backupRestore.dismissOperationSuccessDialog() },
                     onLaunchMediaManager = { launchMediaManagerForUnmount(activity, viewModel) }
                 )
             }
