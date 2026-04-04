@@ -100,19 +100,22 @@ class BackupRestoreManager(
     }
 
     fun onSaveCompleted(uri: android.net.Uri?) {
-        uri?.let { saveUri ->
-            viewModel.exportSeedsCrypt(backupPassword)?.let { seedsJson ->
-                context.contentResolver.openOutputStream(saveUri)?.use { outputStream ->
-                    outputStream.write(seedsJson.toByteArray(Charsets.UTF_8))
-                } ?: Log.e("BackupRestoreManager", "Failed to open output stream for uri $saveUri")
-                context.contentResolver.releasePersistableUriPermission(saveUri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                showTimedMessage("Backup saved to USB")
-                operationSuccessMessage = "Backup successful"
-                showOperationSuccessDialog = true
-            }
-            showBackupDialog = false
+        try {
+            uri?.let { saveUri ->
+                viewModel.exportSeedsCrypt(backupPassword)?.let { seedsJson ->
+                    context.contentResolver.openOutputStream(saveUri)?.use { outputStream ->
+                        outputStream.write(seedsJson.toByteArray(Charsets.UTF_8))
+                    } ?: Log.e("BackupRestoreManager", "Failed to open output stream for uri $saveUri")
+                    context.contentResolver.releasePersistableUriPermission(saveUri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    showTimedMessage("Backup saved to USB")
+                    operationSuccessMessage = "Backup successful"
+                    showOperationSuccessDialog = true
+                }
+                showBackupDialog = false
+            } ?: showTimedMessage("Failed to save backup")
+        } finally {
             backupPassword = ""
-        } ?: showTimedMessage("Failed to save backup")
+        }
     }
 
     fun onRestoreFileSelected(uri: android.net.Uri?) {
@@ -125,6 +128,7 @@ class BackupRestoreManager(
     }
 
     fun onRestoreSuccess(count: Int) {
+        encryptedData = null
         operationSuccessMessage = "Restore successful ($count entries)"
         showOperationSuccessDialog = true
     }

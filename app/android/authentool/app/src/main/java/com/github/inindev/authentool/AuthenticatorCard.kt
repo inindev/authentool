@@ -117,7 +117,6 @@ fun AuthenticatorCard(
                     },
                     onLongPress = {
                         if (!state.isEditing) {
-                            println("long-press on card.id: ${card.id}")
                             onDispatch(AuthCommand.StartEditing(card.id))
                         }
                     }
