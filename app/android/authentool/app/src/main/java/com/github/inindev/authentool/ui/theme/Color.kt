@@ -76,7 +76,7 @@ val DarkColorScheme = CustomColorScheme(
 val LocalCustomColorScheme = compositionLocalOf { LightColorScheme }
 
 /**
- * Maps CustomColorScheme to Material 3’s ColorScheme
+ * Maps CustomColorScheme to Material 3's ColorScheme
  */
 fun CustomColorScheme.toMaterial3ColorScheme(): androidx.compose.material3.ColorScheme {
     return if (this == LightColorScheme) {

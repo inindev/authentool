@@ -165,7 +165,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private fun saveCodes(codes: List<AuthCard>) {
         val preferences = prefs ?: run {
-            _uiState.update { it.copy(errorMessage = "Storage unavailable. Changes won’t persist.") }
+            _uiState.update { it.copy(errorMessage = "Storage unavailable. Changes won't persist.") }
             return
         }
         try {
