@@ -296,8 +296,8 @@ fun AuthGrid(
                     storageVolumes = backupRestore.storageVolumes,
                     storageManager = LocalContext.current.getSystemService<StorageManager>(),
                     context = LocalContext.current,
-                    onSaveRequested = { password ->
-                        backupRestore.onSaveRequested(password, saveFileLauncher)
+                    onSaveRequested = { passwordChars ->
+                        backupRestore.onSaveRequested(passwordChars, saveFileLauncher)
                     },
                     onDismiss = { backupRestore.dismissBackupDialog() },
                     onRetry = { backupRestore.refreshStorageVolumes() }
@@ -501,7 +501,7 @@ fun BackupDialog(
     storageVolumes: List<Pair<File, Boolean>>,
     storageManager: StorageManager?,
     context: Context,
-    onSaveRequested: (String) -> Unit,
+    onSaveRequested: (CharArray) -> Unit,
     onDismiss: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
@@ -568,7 +568,10 @@ fun BackupDialog(
                     onClick = {
                         val trimmedPassword = password.trim()
                         if (trimmedPassword.length >= 8) {
-                            onSaveRequested(trimmedPassword)
+                            // ownership of the CharArray transfers to BackupRestoreManager,
+                            // which zeros it after onSaveCompleted runs.
+                            onSaveRequested(trimmedPassword.toCharArray())
+                            password = ""
                         }
                     },
                     enabled = password.trim().length >= 8
@@ -627,7 +630,7 @@ fun RestoreStorageCheckDialog(
 fun RestoreSeedsDialog(
     showDialog: Boolean,
     encryptedData: String?,
-    onImport: (encryptedData: String, password: String, merge: Boolean) -> Int?,
+    onImport: (encryptedData: String, password: CharArray, merge: Boolean) -> Int?,
     onDispatch: (AuthCommand) -> Unit,
     onDismiss: () -> Unit,
     onSuccess: (Int) -> Unit,
@@ -692,19 +695,25 @@ fun RestoreSeedsDialog(
                 onClick = {
                     val trimmedPassword = password.trim()
                     if (trimmedPassword.length >= 8) {
-                        onImport(encryptedData, password, mergeChecked)?.let { count ->
-                            onSuccess(count)
-                            coroutineScope.launch {
-                                onDispatch(AuthCommand.SetError("Restored $count entries"))
-                                delay(ERROR_DISPLAY_DURATION_MS)
-                                onDispatch(AuthCommand.SetError(null))
+                        val pwdChars = trimmedPassword.toCharArray()
+                        try {
+                            onImport(encryptedData, pwdChars, mergeChecked)?.let { count ->
+                                onSuccess(count)
+                                coroutineScope.launch {
+                                    onDispatch(AuthCommand.SetError("Restored $count entries"))
+                                    delay(ERROR_DISPLAY_DURATION_MS)
+                                    onDispatch(AuthCommand.SetError(null))
+                                }
+                            } ?: run {
+                                coroutineScope.launch {
+                                    onDispatch(AuthCommand.SetError("Restore failed: Invalid password or data"))
+                                    delay(ERROR_DISPLAY_DURATION_MS)
+                                    onDispatch(AuthCommand.SetError(null))
+                                }
                             }
-                        } ?: run {
-                            coroutineScope.launch {
-                                onDispatch(AuthCommand.SetError("Restore failed: Invalid password or data"))
-                                delay(ERROR_DISPLAY_DURATION_MS)
-                                onDispatch(AuthCommand.SetError(null))
-                            }
+                        } finally {
+                            java.util.Arrays.fill(pwdChars, '\u0000')
+                            password = ""
                         }
                         onDismiss()
                     }

@@ -219,7 +219,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     @Serializable
     private data class ExportEntry(val name: String, val seed: String)
 
-    fun exportSeedsCrypt(password: String): String? {
+    fun exportSeedsCrypt(password: CharArray): String? {
         return try {
             val codes = _uiState.value.codes.map { ExportEntry(it.name, it.seed) }
             val json = Json.encodeToString(codes)
@@ -231,7 +231,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     @OptIn(ExperimentalSerializationApi::class)
-    fun importSeedsCrypt(encryptedData: String, password: String, merge: Boolean): Int? {
+    fun importSeedsCrypt(encryptedData: String, password: CharArray, merge: Boolean): Int? {
         // lenient json parser for importing user-provided backups
         val json = Json {
             allowTrailingComma = true      // permits trailing commas in arrays/objects

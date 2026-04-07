@@ -23,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Arrays
 
 private const val ERROR_DISPLAY_DURATION_MS = 3000L
 private const val DATE_FORMAT = "yyyyMMdd"
@@ -42,7 +43,11 @@ class BackupRestoreManager(
     var operationSuccessMessage by mutableStateOf("")
     var encryptedData by mutableStateOf<String?>(null)
     var storageVolumes by mutableStateOf(emptyList<Pair<File, Boolean>>())
-    var backupPassword by mutableStateOf("")
+
+    // backupPassword is held briefly between onSaveRequested and onSaveCompleted while the
+    // system file picker is in front. it is intentionally not Compose state (no observers) and
+    // is zeroed in onSaveCompleted's finally block.
+    private var backupPassword: CharArray? = null
 
     val fileName: String
         get() {
@@ -94,15 +99,24 @@ class BackupRestoreManager(
         }
     }
 
-    fun onSaveRequested(password: String, saveFileLauncher: ActivityResultLauncher<String>) {
+    /**
+     * Stores [password] for use by [onSaveCompleted]. Ownership of the array transfers to this
+     * manager — the caller must not zero or reuse it.
+     */
+    fun onSaveRequested(password: CharArray, saveFileLauncher: ActivityResultLauncher<String>) {
         backupPassword = password
         saveFileLauncher.launch(fileName)
     }
 
     fun onSaveCompleted(uri: android.net.Uri?) {
+        val pwd = backupPassword
         try {
+            if (pwd == null) {
+                showTimedMessage("Failed to save backup")
+                return
+            }
             uri?.let { saveUri ->
-                viewModel.exportSeedsCrypt(backupPassword)?.let { seedsJson ->
+                viewModel.exportSeedsCrypt(pwd)?.let { seedsJson ->
                     context.contentResolver.openOutputStream(saveUri)?.use { outputStream ->
                         outputStream.write(seedsJson.toByteArray(Charsets.UTF_8))
                     } ?: Log.e("BackupRestoreManager", "Failed to open output stream for uri $saveUri")
@@ -114,7 +128,8 @@ class BackupRestoreManager(
                 showBackupDialog = false
             } ?: showTimedMessage("Failed to save backup")
         } finally {
-            backupPassword = ""
+            pwd?.let { Arrays.fill(it, '\u0000') }
+            backupPassword = null
         }
     }
 

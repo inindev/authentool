@@ -25,13 +25,15 @@ data class Version(
 
 /**
  * Encrypts this string using the provided password.
+ * The caller retains ownership of [password] and is responsible for zeroing it after use.
  */
-fun String.encrypt(password: String): String = CryptUtil.encrypt(this, password)
+fun String.encrypt(password: CharArray): String = CryptUtil.encrypt(this, password)
 
 /**
  * Decrypts this Base64-encoded encrypted string using the provided password.
+ * The caller retains ownership of [password] and is responsible for zeroing it after use.
  */
-fun String.decrypt(password: String): String = CryptUtil.decrypt(this, password)
+fun String.decrypt(password: CharArray): String = CryptUtil.decrypt(this, password)
 
 /**
  * Utility object for encrypting and decrypting data using AES-GCM.
@@ -49,8 +51,9 @@ object CryptUtil {
 
     /**
      * Encrypts the plaintext using the provided password.
+     * The caller retains ownership of [password] and is responsible for zeroing it after use.
      */
-    fun encrypt(plaintext: String, password: String): String {
+    fun encrypt(plaintext: String, password: CharArray): String {
         require(plaintext.isNotEmpty()) { "Plaintext cannot be empty" }
         require(password.isNotEmpty()) { "Password cannot be empty" }
 
@@ -66,8 +69,9 @@ object CryptUtil {
 
     /**
      * Decrypts the Base64-encoded encrypted text using the provided password.
+     * The caller retains ownership of [password] and is responsible for zeroing it after use.
      */
-    fun decrypt(base64Encrypted: String, password: String): String {
+    fun decrypt(base64Encrypted: String, password: CharArray): String {
         try {
             // sanitize input by removing leading/trailing whitespace and newlines
             val sanitizedBase64 = base64Encrypted.trim()
@@ -105,15 +109,15 @@ object CryptUtil {
 
     /**
      * Derives a key from the password and salt using PBKDF2.
+     * The [password] is not modified; [PBEKeySpec.clearPassword] zeros the spec's internal copy.
      */
-    private fun deriveKey(password: String, salt: ByteArray): ByteArray {
+    private fun deriveKey(password: CharArray, salt: ByteArray): ByteArray {
         val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        val spec = PBEKeySpec(
-            password.toCharArray(),
-            salt,
-            currentVersion.iterations,
-            KEY_SIZE * 8
-        )
-        return factory.generateSecret(spec).encoded
+        val spec = PBEKeySpec(password, salt, currentVersion.iterations, KEY_SIZE * 8)
+        try {
+            return factory.generateSecret(spec).encoded
+        } finally {
+            spec.clearPassword()
+        }
     }
 }
