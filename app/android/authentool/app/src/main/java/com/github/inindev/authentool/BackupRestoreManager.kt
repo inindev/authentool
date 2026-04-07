@@ -111,22 +111,40 @@ class BackupRestoreManager(
     fun onSaveCompleted(uri: android.net.Uri?) {
         val pwd = backupPassword
         try {
-            if (pwd == null) {
+            if (pwd == null || uri == null) {
                 showTimedMessage("Failed to save backup")
+                showBackupDialog = false
                 return
             }
-            uri?.let { saveUri ->
-                viewModel.exportSeedsCrypt(pwd)?.let { seedsJson ->
-                    context.contentResolver.openOutputStream(saveUri)?.use { outputStream ->
-                        outputStream.write(seedsJson.toByteArray(Charsets.UTF_8))
-                    } ?: Log.e("BackupRestoreManager", "Failed to open output stream for uri $saveUri")
-                    context.contentResolver.releasePersistableUriPermission(saveUri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                    showTimedMessage("Backup saved to USB")
-                    operationSuccessMessage = "Backup successful"
-                    showOperationSuccessDialog = true
-                }
+            val seedsJson = viewModel.exportSeedsCrypt(pwd)
+            if (seedsJson == null) {
+                // viewModel.exportSeedsCrypt already set errorMessage in uiState on failure
                 showBackupDialog = false
-            } ?: showTimedMessage("Failed to save backup")
+                return
+            }
+            val wrote = try {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(seedsJson.toByteArray(Charsets.UTF_8))
+                    true
+                } ?: run {
+                    Log.e("BackupRestoreManager", "Failed to open output stream for uri $uri")
+                    false
+                }
+            } catch (e: Exception) {
+                Log.e("BackupRestoreManager", "Failed to write backup to uri $uri", e)
+                false
+            }
+            if (!wrote) {
+                showTimedMessage("Failed to save backup")
+                showBackupDialog = false
+                return
+            }
+            // only release the URI grant after a successful write so a retry isn't blocked.
+            context.contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            showTimedMessage("Backup saved to USB")
+            operationSuccessMessage = "Backup successful"
+            showOperationSuccessDialog = true
+            showBackupDialog = false
         } finally {
             pwd?.let { Arrays.fill(it, '\u0000') }
             backupPassword = null
@@ -134,11 +152,20 @@ class BackupRestoreManager(
     }
 
     fun onRestoreFileSelected(uri: android.net.Uri?) {
-        uri?.let {
-            context.contentResolver.openInputStream(it)?.use { inputStream ->
+        if (uri == null) return
+        try {
+            val opened = context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 encryptedData = inputStream.readBytes().toString(Charsets.UTF_8)
                 showRestoreSeedsDialog = true
+                true
+            } ?: false
+            if (!opened) {
+                Log.e("BackupRestoreManager", "Failed to open input stream for uri $uri")
+                showTimedMessage("Failed to read backup file")
             }
+        } catch (e: Exception) {
+            Log.e("BackupRestoreManager", "Failed to read backup file from uri $uri", e)
+            showTimedMessage("Failed to read backup file")
         }
     }
 
