@@ -12,12 +12,12 @@ kotlin {
 
 android {
     namespace = "com.github.inindev.authentool"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.github.inindev.authentool"
         minSdk = 33
-        targetSdk = 35
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
 
