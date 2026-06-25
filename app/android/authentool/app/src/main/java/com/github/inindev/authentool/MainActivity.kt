@@ -25,10 +25,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -70,9 +71,10 @@ import com.github.inindev.authentool.ui.theme.customColorScheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.time.Duration.Companion.milliseconds
 
 const val HIGHLIGHT_DELAY_MS = 8000L
-private const val ERROR_DISPLAY_DURATION_MS = 3000L
+const val ERROR_DISPLAY_DURATION_MS = 3000L
 private const val ANIMATION_DURATION_MS = 100
 
 // countdown bar placement
@@ -126,7 +128,7 @@ fun MainActivityContent(viewModel: MainViewModel, activity: MainActivity) {
         }
     }
 
-    AppColorTheme(darkTheme = darkTheme, dynamicColor = false) {
+    AppColorTheme(darkTheme = darkTheme) {
         val targetDensity = 320f / 160f
         val currentDensity = LocalDensity.current.density
         val adjustedDensity = if (currentDensity > targetDensity) targetDensity else currentDensity
@@ -201,7 +203,7 @@ fun AuthGrid(
     val totpCodes = uiState.totpCodes
     val colorScheme = MaterialTheme.customColorScheme
     val density = LocalDensity.current
-    val columns = 2
+    val columns = GRID_COLUMNS
 
     val backupRestore = rememberBackupRestoreManager(viewModel)
     val saveFileLauncher = rememberSaveFileLauncher(backupRestore)
@@ -225,7 +227,7 @@ fun AuthGrid(
             totpCode = totpCodes.getOrElse(index) { "000000" },
             isEditing = uiState.editingCardId == card.id,
             isHighlighted = uiState.highlightedCardId == card.id,
-            position = GridPosition(index, index / columns, index % columns)
+            position = GridPosition(index, index / columns, index % columns, codes.size, columns)
         )
     }
 
@@ -676,7 +678,7 @@ fun RestoreSeedsDialog(
                     Checkbox(
                         checked = mergeChecked,
                         onCheckedChange = { mergeChecked = it },
-                        colors = androidx.compose.material3.CheckboxDefaults.colors(
+                        colors = CheckboxDefaults.colors(
                             checkedColor = colors.CardTotp,
                             uncheckedColor = colors.AppText
                         )
@@ -701,13 +703,13 @@ fun RestoreSeedsDialog(
                                 onSuccess(count)
                                 coroutineScope.launch {
                                     onDispatch(AuthCommand.SetError("Restored $count entries"))
-                                    delay(ERROR_DISPLAY_DURATION_MS)
+                                    delay(ERROR_DISPLAY_DURATION_MS.milliseconds)
                                     onDispatch(AuthCommand.SetError(null))
                                 }
                             } ?: run {
                                 coroutineScope.launch {
                                     onDispatch(AuthCommand.SetError("Restore failed: Invalid password or data"))
-                                    delay(ERROR_DISPLAY_DURATION_MS)
+                                    delay(ERROR_DISPLAY_DURATION_MS.milliseconds)
                                     onDispatch(AuthCommand.SetError(null))
                                 }
                             }

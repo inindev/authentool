@@ -1,6 +1,7 @@
 package com.github.inindev.authentool
 
 import android.app.Application
+import android.util.Log
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -18,6 +19,8 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
+
+const val GRID_COLUMNS = 2
 
 data class MainUiState(
     val codes: List<AuthCard> = emptyList(),
@@ -68,7 +71,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
-            android.util.Log.e("MainViewModel", "failed to initialize encryptedsharedpreferences: ${e.message}")
+            Log.e("MainViewModel", "failed to initialize encryptedsharedpreferences: ${e.message}")
             _uiState.update { it.copy(errorMessage = "Storage initialization failed.") }
             null
         }
@@ -136,7 +139,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun swapCards(state: MainUiState, index: Int, direction: Direction): MainUiState {
-        val columns = 2
+        val columns = GRID_COLUMNS
         val toIndex = calculateNewIndex(index, direction, state.codes.size, columns)
         return if (toIndex != null) {
             val newCodes = state.codes.toMutableList().apply {
@@ -185,7 +188,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadCodes() {
         val preferences = prefs ?: run {
-            android.util.Log.w("MainViewModel", "prefs unavailable - using in-memory storage")
+            Log.w("MainViewModel", "prefs unavailable - using in-memory storage")
             return
         }
         try {

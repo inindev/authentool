@@ -60,11 +60,15 @@ object CryptUtil {
         val salt = SecureRandom().generateSeed(SALT_SIZE)
         val iv = SecureRandom().generateSeed(IV_SIZE)
         val key = deriveKey(password, salt)
-        val cipher = Cipher.getInstance(currentVersion.cipher)
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(TAG_SIZE, iv))
-        val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
-        val output = byteArrayOf(currentVersion.id) + salt + iv + ciphertext
-        return encoder.encodeToString(output)
+        try {
+            val cipher = Cipher.getInstance(currentVersion.cipher)
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(TAG_SIZE, iv))
+            val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+            val output = byteArrayOf(currentVersion.id) + salt + iv + ciphertext
+            return encoder.encodeToString(output)
+        } finally {
+            key.fill(0)
+        }
     }
 
     /**
@@ -98,10 +102,14 @@ object CryptUtil {
             val iv = encryptedBytes.copyOfRange(1 + SALT_SIZE, 1 + SALT_SIZE + IV_SIZE)
             val ciphertext = encryptedBytes.copyOfRange(1 + SALT_SIZE + IV_SIZE, encryptedBytes.size)
             val key = deriveKey(password, salt)
-            val cipher = Cipher.getInstance(currentVersion.cipher)
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(TAG_SIZE, iv))
-            val decryptedBytes = cipher.doFinal(ciphertext)
-            return String(decryptedBytes, Charsets.UTF_8)
+            try {
+                val cipher = Cipher.getInstance(currentVersion.cipher)
+                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(TAG_SIZE, iv))
+                val decryptedBytes = cipher.doFinal(ciphertext)
+                return String(decryptedBytes, Charsets.UTF_8)
+            } finally {
+                key.fill(0)
+            }
         } catch (e: Exception) {
             throw CryptException("Decryption failed: ${e.message}", e)
         }

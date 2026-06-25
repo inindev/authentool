@@ -45,6 +45,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.github.inindev.authentool.ui.theme.customColorScheme
 import kotlinx.serialization.Serializable
+import androidx.compose.ui.graphics.vector.ImageVector
 import java.util.UUID
 
 @Stable
@@ -69,8 +70,8 @@ data class AuthCardUiState(
 }
 
 @Immutable
-data class GridPosition(val index: Int, val row: Int, val column: Int) {
-    fun canMove(direction: Direction, totalItems: Int, columns: Int): Boolean = when (direction) {
+data class GridPosition(val index: Int, val row: Int, val column: Int, val totalItems: Int = 0, val columns: Int = GRID_COLUMNS) {
+    fun canMove(direction: Direction): Boolean = when (direction) {
         Direction.UP -> row > 0
         Direction.DOWN -> index + columns < totalItems
         Direction.LEFT -> column > 0
@@ -166,16 +167,16 @@ fun AuthenticatorCard(
             if (state.isEditing) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    MoveButton(Icons.Default.ArrowUpward, "move up", colors.text, state.position.canMove(Direction.UP, Int.MAX_VALUE, 2)) {
+                    MoveButton(Icons.Default.ArrowUpward, "move up", colors.text, state.position.canMove(Direction.UP)) {
                         onDispatch(AuthCommand.MoveCard(card.id, Direction.UP))
                     }
-                    MoveButton(Icons.AutoMirrored.Filled.ArrowBack, "move left", colors.text, state.position.canMove(Direction.LEFT, Int.MAX_VALUE, 2)) {
+                    MoveButton(Icons.AutoMirrored.Filled.ArrowBack, "move left", colors.text, state.position.canMove(Direction.LEFT)) {
                         onDispatch(AuthCommand.MoveCard(card.id, Direction.LEFT))
                     }
-                    MoveButton(Icons.AutoMirrored.Filled.ArrowForward, "move right", colors.text, state.position.canMove(Direction.RIGHT, Int.MAX_VALUE, 2)) {
+                    MoveButton(Icons.AutoMirrored.Filled.ArrowForward, "move right", colors.text, state.position.canMove(Direction.RIGHT)) {
                         onDispatch(AuthCommand.MoveCard(card.id, Direction.RIGHT))
                     }
-                    MoveButton(Icons.Default.ArrowDownward, "move down", colors.text, state.position.canMove(Direction.DOWN, Int.MAX_VALUE, 2)) {
+                    MoveButton(Icons.Default.ArrowDownward, "move down", colors.text, state.position.canMove(Direction.DOWN)) {
                         onDispatch(AuthCommand.MoveCard(card.id, Direction.DOWN))
                     }
                 }
@@ -206,7 +207,7 @@ fun AuthenticatorCard(
 }
 
 @Composable
-private fun MoveButton(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: String, tint: Color, enabled: Boolean, onClick: () -> Unit) {
+private fun MoveButton(icon: ImageVector, desc: String, tint: Color, enabled: Boolean, onClick: () -> Unit) {
     IconButton(onClick = onClick, enabled = enabled) {
         Icon(icon, contentDescription = desc, tint = tint)
     }

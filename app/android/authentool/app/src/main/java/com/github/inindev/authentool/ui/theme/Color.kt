@@ -1,5 +1,6 @@
 package com.github.inindev.authentool.ui.theme
 
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.compositionLocalOf
@@ -20,9 +21,6 @@ val OliveDrab = Color(0xFF5B8655)      // card background highlight (dark)
 val MediumGray = Color(0xFFE0E0E0)     // progress track (light), top bar background (light)
 val DarkerGray = Color(0xFF616161)     // progress track (dark)
 val VeryDarkGray = Color(0xFF1E1E1E)   // top bar background (dark)
-// experimental colors (unused)
-val DarkGoldenRod = Color(0xFFB8860B)  // experimental, unused
-val SlateGray = Color(0xFF708090)      // experimental, unused
 
 /**
  * Custom color scheme for Authentool
@@ -78,7 +76,7 @@ val LocalCustomColorScheme = compositionLocalOf { LightColorScheme }
 /**
  * Maps CustomColorScheme to Material 3's ColorScheme
  */
-fun CustomColorScheme.toMaterial3ColorScheme(): androidx.compose.material3.ColorScheme {
+fun CustomColorScheme.toMaterial3ColorScheme(): ColorScheme {
     return if (this == LightColorScheme) {
         lightColorScheme(
             primary = this.CardTotp,              // CardTotp maps to primary

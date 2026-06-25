@@ -2,19 +2,19 @@ package com.github.inindev.authentool.ui.theme
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 
 @Composable
 fun AppColorTheme(
     darkTheme: Boolean = false,
-    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val customColorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
     val material3ColorScheme = customColorScheme.toMaterial3ColorScheme()
 
     // provide the custom scheme via CompositionLocal
-    androidx.compose.runtime.CompositionLocalProvider(
+    CompositionLocalProvider(
         LocalCustomColorScheme provides customColorScheme
     ) {
         // apply Material 3 theme for compatibility

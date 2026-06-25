@@ -22,10 +22,13 @@ import androidx.core.net.toUri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import android.net.Uri
 import java.io.File
+import java.text.SimpleDateFormat
 import java.util.Arrays
+import java.util.Date
+import java.util.Locale
 
-private const val ERROR_DISPLAY_DURATION_MS = 3000L
 private const val DATE_FORMAT = "yyyyMMdd"
 private const val APP_NAME = "authentool"
 
@@ -51,8 +54,8 @@ class BackupRestoreManager(
 
     val fileName: String
         get() {
-            val date = java.text.SimpleDateFormat(DATE_FORMAT, java.util.Locale.US)
-                .format(java.util.Date())
+            val date = SimpleDateFormat(DATE_FORMAT, Locale.US)
+                .format(Date())
             return "${APP_NAME}_${date}.enc"
         }
 
@@ -108,7 +111,7 @@ class BackupRestoreManager(
         saveFileLauncher.launch(fileName)
     }
 
-    fun onSaveCompleted(uri: android.net.Uri?) {
+    fun onSaveCompleted(uri: Uri?) {
         val pwd = backupPassword
         try {
             if (pwd == null || uri == null) {
@@ -151,7 +154,7 @@ class BackupRestoreManager(
         }
     }
 
-    fun onRestoreFileSelected(uri: android.net.Uri?) {
+    fun onRestoreFileSelected(uri: Uri?) {
         if (uri == null) return
         try {
             val opened = context.contentResolver.openInputStream(uri)?.use { inputStream ->
