@@ -67,6 +67,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.content.getSystemService
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.inindev.authentool.ui.theme.AppColorTheme
+import com.github.inindev.authentool.ui.theme.EspressoColorScheme
+import com.github.inindev.authentool.ui.theme.FrostColorScheme
+import com.github.inindev.authentool.ui.theme.MidnightColorScheme
+import com.github.inindev.authentool.ui.theme.SunriseColorScheme
 import com.github.inindev.authentool.ui.theme.customColorScheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -101,10 +105,12 @@ class MainActivity : ComponentActivity() {
 fun MainActivityContent(viewModel: MainViewModel, activity: MainActivity) {
     val uiState by viewModel.uiState.collectAsState()
     val systemDarkTheme = isSystemInDarkTheme()
-    val darkTheme = when (uiState.themeMode) {
-        ThemeMode.SYSTEM -> systemDarkTheme
-        ThemeMode.DAY -> false
-        ThemeMode.NIGHT -> true
+    val colorScheme = when (uiState.themeMode) {
+        ThemeMode.SYSTEM -> if (systemDarkTheme) EspressoColorScheme else SunriseColorScheme
+        ThemeMode.FROST -> FrostColorScheme
+        ThemeMode.SUNRISE -> SunriseColorScheme
+        ThemeMode.MIDNIGHT -> MidnightColorScheme
+        ThemeMode.ESPRESSO -> EspressoColorScheme
     }
     var showAddDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -128,7 +134,7 @@ fun MainActivityContent(viewModel: MainViewModel, activity: MainActivity) {
         }
     }
 
-    AppColorTheme(darkTheme = darkTheme) {
+    AppColorTheme(colorScheme = colorScheme) {
         val targetDensity = 320f / 160f
         val currentDensity = LocalDensity.current.density
         val adjustedDensity = if (currentDensity > targetDensity) targetDensity else currentDensity
@@ -478,8 +484,10 @@ fun SystemMenu(
                             Text(
                                 text = when (mode) {
                                     ThemeMode.SYSTEM -> "System"
-                                    ThemeMode.DAY -> "Light"
-                                    ThemeMode.NIGHT -> "Dark"
+                                    ThemeMode.FROST -> "Frost"
+                                    ThemeMode.SUNRISE -> "Sunrise"
+                                    ThemeMode.MIDNIGHT -> "Midnight"
+                                    ThemeMode.ESPRESSO -> "Espresso"
                                 },
                                 color = colors.AppText,
                                 style = MaterialTheme.typography.bodyMedium

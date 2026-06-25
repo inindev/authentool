@@ -215,7 +215,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadThemeMode() {
         prefs?.let {
             val savedMode = it.getString("theme_preference", "SYSTEM") ?: "SYSTEM"
-            _uiState.update { state -> state.copy(themeMode = ThemeMode.valueOf(savedMode)) }
+            val mode = try {
+                ThemeMode.valueOf(savedMode)
+            } catch (_: IllegalArgumentException) {
+                ThemeMode.SYSTEM
+            }
+            _uiState.update { state -> state.copy(themeMode = mode) }
         }
     }
 
@@ -300,4 +305,4 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
-enum class ThemeMode { SYSTEM, DAY, NIGHT }
+enum class ThemeMode { SYSTEM, FROST, SUNRISE, MIDNIGHT, ESPRESSO }

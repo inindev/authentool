@@ -7,15 +7,14 @@ import androidx.compose.runtime.ReadOnlyComposable
 
 @Composable
 fun AppColorTheme(
-    darkTheme: Boolean = false,
+    colorScheme: CustomColorScheme = SunriseColorScheme,
     content: @Composable () -> Unit
 ) {
-    val customColorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
-    val material3ColorScheme = customColorScheme.toMaterial3ColorScheme()
+    val material3ColorScheme = colorScheme.toMaterial3ColorScheme()
 
     // provide the custom scheme via CompositionLocal
     CompositionLocalProvider(
-        LocalCustomColorScheme provides customColorScheme
+        LocalCustomColorScheme provides colorScheme
     ) {
         // apply Material 3 theme for compatibility
         MaterialTheme(
