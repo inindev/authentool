@@ -1,0 +1,14 @@
+# Xcode / SwiftPM build artifacts
+.build/
+DerivedData/
+# Makefile's xcodebuild derivedDataPath
+/Build/
+/build/
+*.xcuserstate
+xcuserdata/
+
+# Built app bundles (Xcode buries the real one in DerivedData)
+*.app
+
+# macOS
+.DS_Store
