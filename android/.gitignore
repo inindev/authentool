@@ -53,6 +53,9 @@ out/
 # Local gradle distribution
 /gradle/wrapper/dists/
 
+# Keep the Gradle wrapper jar (parent .gitignore has *.jar)
+!gradle/wrapper/gradle-wrapper.jar
+
 # Hidden gradle files
 .gradle
 
